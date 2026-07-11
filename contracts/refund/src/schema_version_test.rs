@@ -28,5 +28,5 @@ fn test_migrate_schema_rejects_already_at_target() {
     assert_eq!(client.get_schema_version(), 2);
 
     let result = client.try_migrate_schema(&admin, &2);
-    assert_eq!(result, Err(Ok(Error::SchemaAlreadyAtTarget)));
+    assert_eq!(result, Err(Ok(Error::Ext(ExtError::SchemaAlreadyAtTarget))));
 }

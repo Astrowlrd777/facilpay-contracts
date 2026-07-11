@@ -482,8 +482,10 @@ fn test_reject_requested_refund_successfully() {
 
     client.reject_refund(&admin, &refund_id, &rejection_reason);
 
+    // Rejection first enters the appeal window (PendingAppeal); it only
+    // finalizes to Rejected once the window closes via finalize_denial.
     let refund = client.get_refund(&refund_id);
-    assert_eq!(refund.status, RefundStatus::Rejected);
+    assert_eq!(refund.status, RefundStatus::PendingAppeal);
 }
 
 #[test]
@@ -811,8 +813,10 @@ fn test_reject_refund_with_empty_reason() {
 
     client.reject_refund(&admin, &refund_id, &rejection_reason);
 
+    // Rejection first enters the appeal window (PendingAppeal); it only
+    // finalizes to Rejected once the window closes via finalize_denial.
     let refund = client.get_refund(&refund_id);
-    assert_eq!(refund.status, RefundStatus::Rejected);
+    assert_eq!(refund.status, RefundStatus::PendingAppeal);
 }
 
 #[test]
@@ -846,8 +850,10 @@ fn test_reject_refund_with_detailed_reason() {
 
     client.reject_refund(&admin, &refund_id, &rejection_reason);
 
+    // Rejection first enters the appeal window (PendingAppeal); it only
+    // finalizes to Rejected once the window closes via finalize_denial.
     let refund = client.get_refund(&refund_id);
-    assert_eq!(refund.status, RefundStatus::Rejected);
+    assert_eq!(refund.status, RefundStatus::PendingAppeal);
 }
 
 #[test]
@@ -1072,6 +1078,12 @@ fn test_status_queries_and_counts() {
     client.reject_refund(&admin, &r2, &String::from_str(&env, "No"));
     client.approve_refund(&admin, &r3);
     client.process_refund(&admin, &r3);
+
+    // Rejection first enters the appeal window (PendingAppeal); advance past
+    // it and finalize so r2 reaches the terminal Rejected status.
+    let r2_refund = client.get_refund(&r2);
+    env.ledger().set_timestamp(r2_refund.appeal_deadline.unwrap());
+    client.finalize_denial(&r2);
 
     assert_eq!(
         client.get_refund_count_by_status(&RefundStatus::Requested),
@@ -2051,7 +2063,10 @@ fn test_file_appeal_after_window_expires_should_fail() {
     );
     client.reject_refund(&admin, &refund_id, &String::from_str(&env, "rejected"));
 
-    env.ledger().set_timestamp(1_000 + 72 * 60 * 60 + 1);
+    // Default appeal window is 7 days (604800s); there is no admin setter
+    // for it, so advance just past that default rather than an assumed
+    // 72-hour window.
+    env.ledger().set_timestamp(1_000 + 604800 + 1);
     client.file_appeal(
         &customer,
         &refund_id,

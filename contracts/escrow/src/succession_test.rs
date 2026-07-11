@@ -16,25 +16,14 @@ fn setup() -> (Env, EscrowContractClient<'static>, Address) {
 }
 
 fn zero_address(env: &Env) -> Address {
-    Address::from_string(
+    // All-zero ed25519 public key (account/"G" address), matching what
+    // `is_zero_address` in lib.rs checks for (SC_ADDRESS_TYPE_ACCOUNT with a
+    // zeroed key). This is a correctly-checksummed strkey, not an arbitrary
+    // "AAAA..." placeholder.
+    Address::from_string(&String::from_str(
         env,
-        &String::from_str(
-            env,
-            "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        ),
-    )
-}
-
-fn setup() -> (Env, EscrowContractClient<'static>, Address) {
-    let env = Env::default();
-    let contract_id = env.register(EscrowContract, ());
-    let client = EscrowContractClient::new(&env, &contract_id);
-    let admin = Address::generate(&env);
-
-    env.mock_all_auths();
-    client.initialize(&admin);
-
-    (env, client, admin)
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF",
+    ))
 }
 
 #[test]

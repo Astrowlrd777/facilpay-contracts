@@ -4107,9 +4107,12 @@ fn test_complete_escrowed_payment_releases_escrow_and_merchant_funds() {
     let admin = Address::generate(&env);
     let amount = 1_000_i128;
 
-    let escrow_admin = Address::generate(&env);
     payment_client.initialize(&admin);
-    escrow_client.initialize(&escrow_admin);
+    escrow_client.initialize(&admin);
+    // `complete_escrowed_payment` releases escrow as its own contract
+    // identity, so it must be registered as a trusted bridge to bypass the
+    // escrow admin early-release timelock.
+    escrow_client.add_trusted_bridge(&admin, &payment_contract_id);
     token_admin_client.mint(&customer, &amount);
     token_user_client.approve(&customer, &payment_contract_id, &amount, &10_000);
 
@@ -7444,6 +7447,7 @@ fn test_recurring_billing_blocked_when_merchant_paused_mid_cycle() {
     let token_addr = env.register_stellar_asset_contract(admin.clone());
     let token = token::StellarAssetClient::new(&env, &token_addr);
     token.mint(&customer, &100_000);
+    token::Client::new(&env, &token_addr).approve(&customer, &contract_id, &100_000, &10000);
 
     env.ledger().set_timestamp(1000);
     // Create active subscription
@@ -7460,7 +7464,7 @@ fn test_recurring_billing_blocked_when_merchant_paused_mid_cycle() {
         &0,
     );
 
-    let sub = client.get_subscription(&sub_id).unwrap();
+    let sub = client.get_subscription(&sub_id);
     assert_eq!(sub.status, SubscriptionStatus::Active);
     assert_eq!(sub.payment_count, 0);
 
@@ -7479,7 +7483,7 @@ fn test_recurring_billing_blocked_when_merchant_paused_mid_cycle() {
     );
 
     // Verify subscription is still in Active status (payment was not executed)
-    let sub = client.get_subscription(&sub_id).unwrap();
+    let sub = client.get_subscription(&sub_id);
     assert_eq!(sub.status, SubscriptionStatus::Active);
     assert_eq!(sub.payment_count, 0);
 
@@ -7488,7 +7492,7 @@ fn test_recurring_billing_blocked_when_merchant_paused_mid_cycle() {
 
     // Now execute payment should succeed
     client.execute_recurring_payment(&sub_id);
-    let sub = client.get_subscription(&sub_id).unwrap();
+    let sub = client.get_subscription(&sub_id);
     assert_eq!(sub.status, SubscriptionStatus::Active);
     assert_eq!(sub.payment_count, 1);
 }

@@ -1,7 +1,7 @@
 #![no_std]
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, token, Address, Bytes,
-    BytesN, Env, IntoVal, String, Symbol, Vec,
+    BytesN, Env, FromVal, IntoVal, String, Symbol, TryFromVal, Val, Vec,
 };
 
 #[cfg(test)]
@@ -188,9 +188,16 @@ pub enum RefundReasonCode {
     Other,
 }
 
+// Issue #138 (recurred): the flat `Error` enum grew past Soroban's 50-variant
+// XDR spec limit (`VecM<ScSpecUdtErrorEnumCaseV0, 50>`), which makes the
+// `#[contracterror]` macro panic with `LengthExceedsMax` at compile time.
+// Split into two `#[contracterror]` enums (each <= 50 variants), wrapped by a
+// single `Error` type so every existing `Result<_, Error>` signature and `?`
+// call site is unaffected. Mirrors the same pattern already used for
+// `Error`/`BasicError`/`EscrowError`/`ActionError` in contracts/escrow/src/lib.rs.
 #[contracterror]
-#[derive(Clone, Debug, PartialEq)]
-pub enum Error {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CoreError {
     InvalidAmount = 1,
     RefundNotFound = 2,
     Unauthorized = 3,
@@ -221,6 +228,11 @@ pub enum Error {
     CircuitBreakerTripped = 29,
     InvalidFeeConfig = 30,
     InsufficientTreasuryFees = 31,
+}
+
+#[contracterror]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ExtError {
     ArbitratorNotFound = 34,
     InvalidScoreThreshold = 35,
     AutoRefundTriggerNotFound = 36,
@@ -232,7 +244,8 @@ pub enum Error {
     MaxHooksPerEventReached = 42,
     HookNotOwnedBySubscriber = 43,
     // Issue #373: Invalid notification hook subscriber address
-    InvalidHookAddress = 58,
+    // (moved from 58, which collided with SchemaAlreadyAtTarget)
+    InvalidHookAddress = 51,
     // Issue #148: Customer eligibility errors
     CustomerBlockedFromRefund = 44,
     EligibilityEntryNotFound = 45,
@@ -251,6 +264,68 @@ pub enum Error {
     // Issue #370: Customer tier policy errors
     TierPolicyNotFound = 57,
     SchemaAlreadyAtTarget = 58,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Error {
+    Core(CoreError),
+    Ext(ExtError),
+}
+
+impl Error {
+    pub fn to_u32(&self) -> u32 {
+        match self {
+            Error::Core(e) => *e as u32,
+            Error::Ext(e) => *e as u32,
+        }
+    }
+}
+
+impl From<Error> for soroban_sdk::Error {
+    fn from(e: Error) -> Self {
+        soroban_sdk::Error::from_contract_error(e.to_u32())
+    }
+}
+
+impl From<&Error> for soroban_sdk::Error {
+    fn from(e: &Error) -> Self {
+        soroban_sdk::Error::from_contract_error(e.to_u32())
+    }
+}
+
+impl TryFrom<soroban_sdk::Error> for Error {
+    type Error = soroban_sdk::Error;
+    fn try_from(error: soroban_sdk::Error) -> Result<Self, Self::Error> {
+        if let Ok(e) = CoreError::try_from(error) {
+            return Ok(Error::Core(e));
+        }
+        if let Ok(e) = ExtError::try_from(error) {
+            return Ok(Error::Ext(e));
+        }
+        Err(error)
+    }
+}
+
+impl TryFrom<&soroban_sdk::Error> for Error {
+    type Error = soroban_sdk::Error;
+    fn try_from(error: &soroban_sdk::Error) -> Result<Self, Self::Error> {
+        <Self as TryFrom<soroban_sdk::Error>>::try_from(*error)
+    }
+}
+
+impl FromVal<Env, Error> for Val {
+    fn from_val(env: &Env, v: &Error) -> Self {
+        soroban_sdk::Error::from(v).into_val(env)
+    }
+}
+
+impl TryFromVal<Env, Val> for Error {
+    type Error = soroban_sdk::ConversionError;
+    fn try_from_val(env: &Env, val: &Val) -> Result<Self, Self::Error> {
+        let error: soroban_sdk::Error =
+            soroban_sdk::Error::try_from_val(env, val).map_err(|_| soroban_sdk::ConversionError)?;
+        Error::try_from(error).map_err(|_| soroban_sdk::ConversionError)
+    }
 }
 
 #[contractevent]
@@ -1270,14 +1345,14 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         let current = Self::get_schema_version(env.clone());
         if current >= target_version {
-            return Err(Error::SchemaAlreadyAtTarget);
+            return Err(Error::Ext(ExtError::SchemaAlreadyAtTarget));
         }
 
         env.storage()
@@ -1314,7 +1389,7 @@ impl RefundContract {
                 .get(&TokenKey::SupportedToken(token.clone()));
             match supported {
                 Some(t) if t.active => {}
-                _ => return Err(Error::UnsupportedRefundToken),
+                _ => return Err(Error::Ext(ExtError::UnsupportedRefundToken)),
             }
         }
 
@@ -1338,7 +1413,7 @@ impl RefundContract {
         env.storage()
             .instance()
             .get(&DataKey::Refund(refund_id))
-            .ok_or(Error::RefundNotFound)
+            .ok_or(Error::Core(CoreError::RefundNotFound))
     }
 
     pub fn approve_refund(env: Env, admin: Address, refund_id: u64) -> Result<(), Error> {
@@ -1365,18 +1440,18 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Refund(refund_id))
-            .ok_or(Error::RefundNotFound)?;
+            .ok_or(Error::Core(CoreError::RefundNotFound))?;
 
         if refund.status != RefundStatus::PendingAppeal {
-            return Err(Error::RefundNotRejected);
+            return Err(Error::Core(CoreError::RefundNotRejected));
         }
 
         let appeal_deadline = refund
             .appeal_deadline
-            .ok_or(Error::RefundNotRejected)?;
+            .ok_or(Error::Core(CoreError::RefundNotRejected))?;
         let now = env.ledger().timestamp();
         if now < appeal_deadline {
-            return Err(Error::InvalidStatus);
+            return Err(Error::Core(CoreError::InvalidStatus));
         }
 
         Self::remove_from_status_index(&env, RefundStatus::PendingAppeal, refund_id)?;
@@ -1419,10 +1494,10 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Refund(refund_id))
-            .ok_or(Error::RefundNotFound)?;
+            .ok_or(Error::Core(CoreError::RefundNotFound))?;
 
         if refund.status != RefundStatus::Requested {
-            return Err(Error::InvalidStatus);
+            return Err(Error::Core(CoreError::InvalidStatus));
         }
 
         Self::remove_from_status_index(env, RefundStatus::Requested, refund_id)?;
@@ -1466,45 +1541,45 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Refund(refund_id))
-            .ok_or(Error::RefundNotFound)?;
+            .ok_or(Error::Core(CoreError::RefundNotFound))?;
 
         if refund.customer != customer {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
         if refund.status != RefundStatus::Rejected
             && refund.status != RefundStatus::PendingAppeal
         {
-            return Err(Error::RefundNotRejected);
+            return Err(Error::Core(CoreError::RefundNotRejected));
         }
         if env
             .storage()
             .instance()
             .has(&SystemKey::AppealByRefund(refund_id))
         {
-            return Err(Error::AppealAlreadyFiled);
+            return Err(Error::Core(CoreError::AppealAlreadyFiled));
         }
 
         let now = env.ledger().timestamp();
         if refund.status == RefundStatus::PendingAppeal {
             let appeal_deadline = refund
                 .appeal_deadline
-                .ok_or(Error::RefundNotRejected)?;
+                .ok_or(Error::Core(CoreError::RefundNotRejected))?;
             if now > appeal_deadline {
-                return Err(Error::AppealWindowExpired);
+                return Err(Error::Core(CoreError::AppealWindowExpired));
             }
         } else {
             let rejected_at: u64 = env
                 .storage()
                 .instance()
                 .get(&SystemKey::RefundRejectedAt(refund_id))
-                .ok_or(Error::RefundNotRejected)?;
+                .ok_or(Error::Core(CoreError::RefundNotRejected))?;
             let appeal_window: u64 = env
                 .storage()
                 .instance()
                 .get(&DataKey::AppealWindowSeconds)
                 .unwrap_or(604800);
             if now > rejected_at.saturating_add(appeal_window) {
-                return Err(Error::AppealWindowExpired);
+                return Err(Error::Core(CoreError::AppealWindowExpired));
             }
         }
 
@@ -1569,18 +1644,18 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         let mut appeal: RefundAppeal = env
             .storage()
             .instance()
             .get(&SystemKey::Appeal(appeal_id))
-            .ok_or(Error::RefundNotFound)?;
+            .ok_or(Error::Core(CoreError::RefundNotFound))?;
         if appeal.resolved {
-            return Err(Error::AlreadyProcessed);
+            return Err(Error::Core(CoreError::AlreadyProcessed));
         }
 
         if uphold {
@@ -1588,11 +1663,11 @@ impl RefundContract {
                 .storage()
                 .instance()
                 .get(&DataKey::Refund(appeal.refund_id))
-                .ok_or(Error::RefundNotFound)?;
+                .ok_or(Error::Core(CoreError::RefundNotFound))?;
             if refund.status != RefundStatus::Rejected
                 && refund.status != RefundStatus::PendingAppeal
             {
-                return Err(Error::RefundNotRejected);
+                return Err(Error::Core(CoreError::RefundNotRejected));
             }
 
             let prior_status = refund.status.clone();
@@ -1604,6 +1679,29 @@ impl RefundContract {
             Self::add_to_status_index(&env, RefundStatus::Approved, refund.id);
 
             Self::process_refund_internal(&env, admin.clone(), refund.id)?;
+        } else {
+            let mut refund: Refund = env
+                .storage()
+                .instance()
+                .get(&DataKey::Refund(appeal.refund_id))
+                .ok_or(Error::Core(CoreError::RefundNotFound))?;
+            if refund.status != RefundStatus::Rejected
+                && refund.status != RefundStatus::PendingAppeal
+            {
+                return Err(Error::Core(CoreError::RefundNotRejected));
+            }
+
+            // The appeal was explicitly denied, so the rejection is final
+            // now — no need to wait out the rest of the appeal window.
+            if refund.status == RefundStatus::PendingAppeal {
+                Self::remove_from_status_index(&env, RefundStatus::PendingAppeal, refund.id)?;
+                refund.status = RefundStatus::Rejected;
+                refund.rejected_at = Some(env.ledger().timestamp());
+                env.storage()
+                    .instance()
+                    .set(&DataKey::Refund(refund.id), &refund);
+                Self::add_to_status_index(&env, RefundStatus::Rejected, refund.id);
+            }
         }
 
         appeal.resolved = true;
@@ -1626,7 +1724,7 @@ impl RefundContract {
         env.storage()
             .instance()
             .get(&SystemKey::Appeal(appeal_id))
-            .ok_or(Error::RefundNotFound)
+            .ok_or(Error::Core(CoreError::RefundNotFound))
     }
 
     pub fn get_appeals_by_customer(env: Env, customer: Address) -> Vec<RefundAppeal> {
@@ -1674,16 +1772,16 @@ impl RefundContract {
         merchant.require_auth();
 
         if payment_id == 0 {
-            return Err(Error::InvalidPaymentId);
+            return Err(Error::Core(CoreError::InvalidPaymentId));
         }
 
         if let Err(_) = Self::validate_bps(refund_bps) {
-            return Err(Error::RefundExceedsPolicy);
+            return Err(Error::Core(CoreError::RefundExceedsPolicy));
         }
 
         let payment = Self::get_external_payment(&env, payment_id)?;
         if payment.merchant != merchant {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         let trigger_count: u64 = env
@@ -1703,7 +1801,7 @@ impl RefundContract {
                     && existing.payment_id == payment_id
                     && existing.condition == condition
                 {
-                    return Err(Error::DuplicateAutoRefundTrigger);
+                    return Err(Error::Ext(ExtError::DuplicateAutoRefundTrigger));
                 }
             }
             trigger_id += 1;
@@ -1750,9 +1848,9 @@ impl RefundContract {
             .amount
             .checked_mul(trigger.refund_bps as i128)
             .and_then(|value| value.checked_div(10000))
-            .ok_or(Error::InvalidAmount)?;
+            .ok_or(Error::Core(CoreError::InvalidAmount))?;
         if refund_amount <= 0 {
-            return Err(Error::InvalidAmount);
+            return Err(Error::Core(CoreError::InvalidAmount));
         }
 
         let refund_id = Self::create_refund(
@@ -1789,7 +1887,7 @@ impl RefundContract {
         env.storage()
             .instance()
             .get(&PolicyKey::AutoRefundTrigger(trigger_id))
-            .ok_or(Error::AutoRefundTriggerNotFound)
+            .ok_or(Error::Ext(ExtError::AutoRefundTriggerNotFound))
     }
 
     pub fn set_merchant_refund_quota(
@@ -1804,9 +1902,9 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         let quota = MerchantRefundQuota {
@@ -1834,16 +1932,16 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         let mut quota: MerchantRefundQuota = env
             .storage()
             .instance()
             .get(&DataKey::MerchantRefundQuota(merchant.clone()))
-            .ok_or(Error::PolicyNotFound)?;
+            .ok_or(Error::Core(CoreError::PolicyNotFound))?;
         quota.used = 0;
         quota.period_start = env.ledger().timestamp();
         env.storage()
@@ -1907,7 +2005,7 @@ impl RefundContract {
         admin.require_auth();
 
         if max_per_window == 0 || window_seconds == 0 {
-            return Err(Error::InvalidAmount);
+            return Err(Error::Core(CoreError::InvalidAmount));
         }
 
         let limit = GlobalRefundRateLimit {
@@ -1936,7 +2034,7 @@ impl RefundContract {
         admin.require_auth();
 
         if new_max_refunds == 0 || new_window_seconds == 0 {
-            return Err(Error::InvalidAmount);
+            return Err(Error::Core(CoreError::InvalidAmount));
         }
 
         let now = env.ledger().timestamp();
@@ -1989,7 +2087,7 @@ impl RefundContract {
             .get(&DataKey::Admin)
             .expect("Admin not set");
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
         let mut list: Vec<Address> = env
             .storage()
@@ -1997,7 +2095,7 @@ impl RefundContract {
             .get(&ArbitrationKey::ArbitratorList)
             .unwrap_or(Vec::new(&env));
         if list.contains(&arbitrator) {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
         list.push_back(arbitrator.clone());
         env.storage()
@@ -2033,30 +2131,30 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         let mut case: ArbitrationCase = env
             .storage()
             .instance()
             .get(&ArbitrationKey::ArbitrationCase(case_id))
-            .ok_or(Error::RefundNotFound)?;
+            .ok_or(Error::Core(CoreError::RefundNotFound))?;
         if case.status != ArbitrationStatus::Open {
-            return Err(Error::InvalidStatus);
+            return Err(Error::Core(CoreError::InvalidStatus));
         }
 
         let refund: Refund = env
             .storage()
             .instance()
             .get(&DataKey::Refund(case.refund_id))
-            .ok_or(Error::RefundNotFound)?;
+            .ok_or(Error::Core(CoreError::RefundNotFound))?;
 
         if let Some(denied_by) = refund.rejected_by.clone() {
             if arbitrator == denied_by {
                 // denied_by cannot arbitrate their own denial decision
-                return Err(Error::Unauthorized);
+                return Err(Error::Core(CoreError::Unauthorized));
             }
         }
 
@@ -2066,7 +2164,7 @@ impl RefundContract {
             .get(&ArbitrationKey::ArbitratorList)
             .unwrap_or(Vec::new(&env));
         if !arbitrators.contains(&arbitrator) {
-            return Err(Error::NotArbitrator);
+            return Err(Error::Core(CoreError::NotArbitrator));
         }
 
         if !case.arbitrators.contains(&arbitrator) {
@@ -2092,12 +2190,17 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Refund(refund_id))
-            .ok_or(Error::RefundNotFound)?;
-        if refund.status != RefundStatus::Rejected {
-            return Err(Error::InvalidStatus);
+            .ok_or(Error::Core(CoreError::RefundNotFound))?;
+        // Matches `file_appeal`'s dual-status check: a rejection sits in
+        // `PendingAppeal` during the appeal window before finalizing to
+        // `Rejected`, and arbitration must remain reachable during that
+        // window, not only after it closes.
+        if refund.status != RefundStatus::Rejected && refund.status != RefundStatus::PendingAppeal
+        {
+            return Err(Error::Core(CoreError::InvalidStatus));
         }
         if fee_amount <= 0 {
-            return Err(Error::InvalidAmount);
+            return Err(Error::Core(CoreError::InvalidAmount));
         }
 
         let counter: u64 = env
@@ -2113,7 +2216,7 @@ impl RefundContract {
             .get(&ArbitrationKey::ArbitratorList)
             .unwrap_or(Vec::new(&env));
         if arbitrators.len() < 3 {
-            return Err(Error::QuorumNotReached);
+            return Err(Error::Core(CoreError::QuorumNotReached));
         }
 
         // Handle staking if enabled
@@ -2125,7 +2228,7 @@ impl RefundContract {
         if let Some(config) = stake_config {
             if config.enabled {
                 if config.amount <= 0 {
-                    return Err(Error::InvalidAmount);
+                    return Err(Error::Core(CoreError::InvalidAmount));
                 }
 
                 // Transfer stake from caller to contract
@@ -2217,22 +2320,22 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&ArbitrationKey::ArbitrationCase(case_id))
-            .ok_or(Error::RefundNotFound)?;
+            .ok_or(Error::Core(CoreError::RefundNotFound))?;
         if case.status != ArbitrationStatus::Open {
-            return Err(Error::InvalidStatus);
+            return Err(Error::Core(CoreError::InvalidStatus));
         }
         if env.ledger().timestamp() > case.deadline {
-            return Err(Error::InvalidStatus);
+            return Err(Error::Core(CoreError::InvalidStatus));
         }
         if !case.arbitrators.contains(&arbitrator) {
-            return Err(Error::NotArbitrator);
+            return Err(Error::Core(CoreError::NotArbitrator));
         }
         if env
             .storage()
             .instance()
             .has(&ArbitrationKey::ArbitratorVote(case_id, arbitrator.clone()))
         {
-            return Err(Error::AlreadyProcessed);
+            return Err(Error::Core(CoreError::AlreadyProcessed));
         }
 
         let refund: Refund = env
@@ -2241,7 +2344,7 @@ impl RefundContract {
             .get(&DataKey::Refund(case.refund_id))
             .unwrap();
         if arbitrator == refund.merchant || arbitrator == refund.customer {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         let vote = ArbitratorVote {
@@ -2291,14 +2394,14 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&ArbitrationKey::ArbitrationCase(case_id))
-            .ok_or(Error::RefundNotFound)?;
+            .ok_or(Error::Core(CoreError::RefundNotFound))?;
         if case.status != ArbitrationStatus::Open {
-            return Err(Error::InvalidStatus);
+            return Err(Error::Core(CoreError::InvalidStatus));
         }
 
         let total_votes = case.votes_for_refund + case.votes_against_refund;
         if total_votes < 3 {
-            return Err(Error::InvalidStatus);
+            return Err(Error::Core(CoreError::InvalidStatus));
         } // quorum
 
         let approved = case.votes_for_refund > case.votes_against_refund;
@@ -2308,17 +2411,27 @@ impl RefundContract {
             .instance()
             .set(&ArbitrationKey::ArbitrationCase(case_id), &case);
 
-        // Update refund status if approved
+        // Update refund status based on the arbitration outcome
+        let mut refund: Refund = env
+            .storage()
+            .instance()
+            .get(&DataKey::Refund(case.refund_id))
+            .unwrap();
         if approved {
-            let mut refund: Refund = env
-                .storage()
-                .instance()
-                .get(&DataKey::Refund(case.refund_id))
-                .unwrap();
             refund.status = RefundStatus::Approved;
             env.storage()
                 .instance()
                 .set(&DataKey::Refund(case.refund_id), &refund);
+        } else if refund.status == RefundStatus::PendingAppeal {
+            // The arbitration panel upheld the rejection, so it's final now
+            // — no need to wait out the rest of the appeal window.
+            Self::remove_from_status_index(&env, RefundStatus::PendingAppeal, refund.id)?;
+            refund.status = RefundStatus::Rejected;
+            refund.rejected_at = Some(env.ledger().timestamp());
+            env.storage()
+                .instance()
+                .set(&DataKey::Refund(case.refund_id), &refund);
+            Self::add_to_status_index(&env, RefundStatus::Rejected, refund.id);
         }
 
         // Distribute fees according to configuration
@@ -2594,9 +2707,9 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
         env.storage()
             .instance()
@@ -2616,20 +2729,20 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&ArbitrationKey::ArbitrationCase(case_id))
-            .ok_or(Error::RefundNotFound)?;
+            .ok_or(Error::Core(CoreError::RefundNotFound))?;
 
         if case.status != ArbitrationStatus::Open {
-            return Err(Error::InvalidStatus);
+            return Err(Error::Core(CoreError::InvalidStatus));
         }
 
         // Block if quorum already reached
         let total_votes = case.votes_for_refund + case.votes_against_refund;
         if total_votes >= 3 {
-            return Err(Error::QuorumNotReached);
+            return Err(Error::Core(CoreError::QuorumNotReached));
         }
 
         if env.ledger().timestamp() < case.timeout_at {
-            return Err(Error::CaseNotTimedOut);
+            return Err(Error::Core(CoreError::CaseNotTimedOut));
         }
 
         let approved = case.default_favor_customer;
@@ -2713,9 +2826,9 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         let template_count: u64 = env
@@ -2759,19 +2872,19 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         let template: RefundPolicyTemplate = env
             .storage()
             .instance()
             .get(&DataKey::RefundPolicyTemplate(template_id))
-            .ok_or(Error::TemplateNotFound)?;
+            .ok_or(Error::Ext(ExtError::TemplateNotFound))?;
 
         if !template.active {
-            return Err(Error::TemplateInactive);
+            return Err(Error::Ext(ExtError::TemplateInactive));
         }
 
         let mut tiers = Vec::new(&env);
@@ -2841,19 +2954,19 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         let mut template: RefundPolicyTemplate = env
             .storage()
             .instance()
             .get(&DataKey::RefundPolicyTemplate(template_id))
-            .ok_or(Error::TemplateNotFound)?;
+            .ok_or(Error::Ext(ExtError::TemplateNotFound))?;
 
         if !template.active {
-            return Err(Error::TemplateInactive);
+            return Err(Error::Ext(ExtError::TemplateInactive));
         }
 
         template.active = false;
@@ -2948,11 +3061,11 @@ impl RefundContract {
 
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         if min_score < 0 {
-            return Err(Error::InvalidScoreThreshold);
+            return Err(Error::Ext(ExtError::InvalidScoreThreshold));
         }
 
         let mut arbitrators: Vec<Address> = env
@@ -3008,7 +3121,7 @@ impl RefundContract {
         env.storage()
             .instance()
             .get(&ArbitrationKey::ArbitrationCase(case_id))
-            .ok_or(Error::RefundNotFound)
+            .ok_or(Error::Core(CoreError::RefundNotFound))
     }
 
     /// Set the arbitration fee configuration
@@ -3023,12 +3136,12 @@ impl RefundContract {
 
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         // Validate that shares add up to 10000 (100%)
         if config.arbitrator_share_bps + config.treasury_share_bps != 10000 {
-            return Err(Error::InvalidFeeConfig);
+            return Err(Error::Core(CoreError::InvalidFeeConfig));
         }
 
         env.storage()
@@ -3107,7 +3220,7 @@ impl RefundContract {
 
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         let accumulated: i128 = env
@@ -3117,7 +3230,7 @@ impl RefundContract {
             .unwrap_or(0);
 
         if accumulated <= 0 {
-            return Err(Error::InsufficientTreasuryFees);
+            return Err(Error::Core(CoreError::InsufficientTreasuryFees));
         }
 
         // Reset accumulated fees
@@ -3139,12 +3252,12 @@ impl RefundContract {
 
         let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         // Validate stake amount if enabled
         if config.enabled && config.amount <= 0 {
-            return Err(Error::InvalidAmount);
+            return Err(Error::Core(CoreError::InvalidAmount));
         }
 
         env.storage()
@@ -3451,7 +3564,7 @@ impl RefundContract {
     ) -> Result<bool, Error> {
         let total_refunded = Self::get_total_refunded_amount(env, payment_id);
         if requested_amount.saturating_add(total_refunded) > original_amount {
-            return Err(Error::TotalRefundsExceedPayment);
+            return Err(Error::Core(CoreError::TotalRefundsExceedPayment));
         }
 
         Ok(true)
@@ -3491,7 +3604,7 @@ impl RefundContract {
         // Validate max_refund_bps is within bounds for all tiers (0-10000 basis points)
         for tier in tiers.iter() {
             if let Err(_) = Self::validate_bps(tier.max_refund_bps) {
-                return Err(Error::RefundExceedsPolicy);
+                return Err(Error::Core(CoreError::RefundExceedsPolicy));
             }
         }
 
@@ -3629,9 +3742,9 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
         env.storage()
             .instance()
@@ -3661,9 +3774,9 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
         env.storage()
             .instance()
@@ -3743,10 +3856,10 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::RefundPolicy(merchant.clone()))
-            .ok_or(Error::PolicyNotFound)?;
+            .ok_or(Error::Core(CoreError::PolicyNotFound))?;
 
         if !policy.active {
-            return Err(Error::PolicyInactive);
+            return Err(Error::Core(CoreError::PolicyInactive));
         }
 
         policy.active = false;
@@ -3773,10 +3886,10 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
 
         if admin != admin_address {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         // Verify refund exists
@@ -3784,7 +3897,7 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Refund(refund_id))
-            .ok_or(Error::RefundNotFound)?;
+            .ok_or(Error::Core(CoreError::RefundNotFound))?;
 
         // Generate immutable audit log entry
         let override_id: u64 = env
@@ -3882,14 +3995,14 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         // Prevent self-parent
         if merchant == parent {
-            return Err(Error::CircularInheritance);
+            return Err(Error::Core(CoreError::CircularInheritance));
         }
 
         // Check for circular reference by traversing up from parent
@@ -3902,12 +4015,12 @@ impl RefundContract {
 
         while depth <= Self::MAX_INHERITANCE_DEPTH {
             if current == merchant {
-                return Err(Error::CircularInheritance);
+                return Err(Error::Core(CoreError::CircularInheritance));
             }
 
             // Check if we've seen this address before (shouldn't happen but safety check)
             if visited.contains(&current) {
-                return Err(Error::CircularInheritance);
+                return Err(Error::Core(CoreError::CircularInheritance));
             }
             visited.push_back(current.clone());
 
@@ -3923,7 +4036,7 @@ impl RefundContract {
 
         // Validate max depth constraint (>= to prevent exceeding max, including the new merchant)
         if depth >= Self::MAX_INHERITANCE_DEPTH {
-            return Err(Error::MaxInheritanceDepth);
+            return Err(Error::Core(CoreError::MaxInheritanceDepth));
         }
 
         // Store the parent relationship using Symbol-based key
@@ -4015,7 +4128,7 @@ impl RefundContract {
                 Some(parent) => {
                     // Check for circular reference
                     if chain.contains(&parent) {
-                        return Err(Error::CircularInheritance);
+                        return Err(Error::Core(CoreError::CircularInheritance));
                     }
                     chain.push_back(parent.clone());
                     current = parent;
@@ -4027,7 +4140,7 @@ impl RefundContract {
 
         // Check if we hit max depth
         if depth >= Self::MAX_INHERITANCE_DEPTH {
-            return Err(Error::MaxInheritanceDepth);
+            return Err(Error::Core(CoreError::MaxInheritanceDepth));
         }
 
         Ok(chain)
@@ -4074,10 +4187,10 @@ impl RefundContract {
         payment_created_at: u64,
     ) -> Result<(), Error> {
         let policy: RefundPolicy = Self::get_effective_refund_policy(env.clone(), merchant.clone())
-            .ok_or(Error::PolicyNotFound)?;
+            .ok_or(Error::Core(CoreError::PolicyNotFound))?;
 
         if !policy.active {
-            return Err(Error::PolicyInactive);
+            return Err(Error::Core(CoreError::PolicyInactive));
         }
 
         let current_time = env.ledger().timestamp();
@@ -4095,7 +4208,7 @@ impl RefundContract {
         }
 
         if !found_tier {
-            return Err(Error::RefundWindowExpired);
+            return Err(Error::Core(CoreError::RefundWindowExpired));
         }
 
         // Issue #370: Override allowed_bps with customer tier policy if set
@@ -4120,7 +4233,7 @@ impl RefundContract {
                         .get(&DataKey::StrictTierPolicy(merchant.clone()))
                         .unwrap_or(false);
                     if strict {
-                        return Err(Error::TierPolicyNotFound);
+                        return Err(Error::Ext(ExtError::TierPolicyNotFound));
                     }
                 }
             }
@@ -4134,7 +4247,7 @@ impl RefundContract {
             .unwrap_or(u32::MAX as i128) as u32;
 
         if refund_percentage_bps > allowed_bps {
-            return Err(Error::RefundExceedsPolicy);
+            return Err(Error::Core(CoreError::RefundExceedsPolicy));
         }
 
         Ok(())
@@ -4160,14 +4273,14 @@ impl RefundContract {
     ) -> Result<(), Error> {
         let count = Self::get_refund_count_by_status(env, status.clone());
         if count == 0 {
-            return Err(Error::InvalidStatus);
+            return Err(Error::Core(CoreError::InvalidStatus));
         }
 
         let index: u64 = env
             .storage()
             .instance()
             .get(&DataKey::RefundStatusIndex(refund_id))
-            .ok_or(Error::InvalidStatus)?;
+            .ok_or(Error::Core(CoreError::InvalidStatus))?;
         let last_index = count - 1;
 
         if index != last_index {
@@ -4175,7 +4288,7 @@ impl RefundContract {
                 .storage()
                 .instance()
                 .get(&DataKey::RefundsByStatus(status.clone(), last_index))
-                .ok_or(Error::InvalidStatus)?;
+                .ok_or(Error::Core(CoreError::InvalidStatus))?;
             env.storage().instance().set(
                 &DataKey::RefundsByStatus(status.clone(), index),
                 &last_refund_id,
@@ -4215,9 +4328,9 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
         env.storage()
             .instance()
@@ -4238,7 +4351,7 @@ impl RefundContract {
             results.push_back(BatchRefundResult {
                 refund_id: 0,
                 success: false,
-                error_code: Error::BatchRefundTooLarge as u32,
+                error_code: Error::Core(CoreError::BatchRefundTooLarge).to_u32(),
                 amount_refunded: 0,
             });
             return results;
@@ -4268,7 +4381,7 @@ impl RefundContract {
                     results.push_back(BatchRefundResult {
                         refund_id,
                         success: false,
-                        error_code: e as u32,
+                        error_code: e.to_u32(),
                         amount_refunded: 0,
                     });
                 }
@@ -4290,7 +4403,7 @@ impl RefundContract {
             results.push_back(BatchRefundResult {
                 refund_id: 0,
                 success: false,
-                error_code: Error::BatchRefundTooLarge as u32,
+                error_code: Error::Core(CoreError::BatchRefundTooLarge).to_u32(),
                 amount_refunded: 0,
             });
             return results;
@@ -4320,7 +4433,7 @@ impl RefundContract {
                     results.push_back(BatchRefundResult {
                         refund_id,
                         success: false,
-                        error_code: e as u32,
+                        error_code: e.to_u32(),
                         amount_refunded: 0,
                     });
                 }
@@ -4341,9 +4454,9 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
         env.storage()
             .instance()
@@ -4394,15 +4507,15 @@ impl RefundContract {
         force_approved: bool,
     ) -> Result<u64, Error> {
         if amount <= 0 {
-            return Err(Error::InvalidAmount);
+            return Err(Error::Core(CoreError::InvalidAmount));
         }
 
         if amount > original_payment_amount {
-            return Err(Error::RefundExceedsPayment);
+            return Err(Error::Core(CoreError::RefundExceedsPayment));
         }
 
         if payment_id == 0 {
-            return Err(Error::InvalidPaymentId);
+            return Err(Error::Core(CoreError::InvalidPaymentId));
         }
 
         if env
@@ -4413,7 +4526,7 @@ impl RefundContract {
         {
             let owned = Self::verify_payment_ownership(env.clone(), payment_id, customer.clone());
             if !owned {
-                return Err(Error::PaymentOwnershipMismatch);
+                return Err(Error::Core(CoreError::PaymentOwnershipMismatch));
             }
         }
 
@@ -4427,14 +4540,14 @@ impl RefundContract {
         // Check for fraud signals (#137)
         if let Some(fraud_signal) = Self::check_fraud_signals(env.clone(), customer.clone()) {
             if !fraud_signal.reviewed {
-                return Err(Error::AddressFlaggedForFraud);
+                return Err(Error::Ext(ExtError::AddressFlaggedForFraud));
             }
         }
 
         // Issue #148: Check merchant-level customer eligibility
         let eligibility_rule = Self::check_refund_eligibility_internal(&env, &merchant, &customer);
         if eligibility_rule == EligibilityRule::Block {
-            return Err(Error::CustomerBlockedFromRefund);
+            return Err(Error::Ext(ExtError::CustomerBlockedFromRefund));
         }
 
         if env.storage().instance().has(&DataKey::Admin) {
@@ -4599,16 +4712,16 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Refund(refund_id))
-            .ok_or(Error::RefundNotFound)?;
+            .ok_or(Error::Core(CoreError::RefundNotFound))?;
 
         if refund.status != RefundStatus::Requested {
-            return Err(Error::InvalidStatus);
+            return Err(Error::Core(CoreError::InvalidStatus));
         }
 
         // Issue #199: reject if TTL has expired
         if let Some(expires_at) = refund.expires_at {
             if env.ledger().timestamp() >= expires_at {
-                return Err(Error::RefundWindowExpired);
+                return Err(Error::Core(CoreError::RefundWindowExpired));
             }
         }
 
@@ -4645,10 +4758,10 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Refund(refund_id))
-            .ok_or(Error::RefundNotFound)?;
+            .ok_or(Error::Core(CoreError::RefundNotFound))?;
 
         if refund.status != RefundStatus::Approved {
-            return Err(Error::InvalidStatus);
+            return Err(Error::Core(CoreError::InvalidStatus));
         }
 
         Self::can_refund_payment(
@@ -4677,9 +4790,9 @@ impl RefundContract {
             let new_used = quota
                 .used
                 .checked_add(refund.amount)
-                .ok_or(Error::InvalidAmount)?;
+                .ok_or(Error::Core(CoreError::InvalidAmount))?;
             if new_used > quota.limit {
-                return Err(Error::RefundExceedsPolicy);
+                return Err(Error::Core(CoreError::RefundExceedsPolicy));
             }
             quota.used = new_used;
             env.storage().instance().set(
@@ -4718,7 +4831,7 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::PaymentContractAddress)
-            .ok_or(Error::PaymentContractNotSet)?;
+            .ok_or(Error::Core(CoreError::PaymentContractNotSet))?;
         let args = (payment_id,).into_val(env);
         let func = Symbol::new(env, "get_payment");
         match env.try_invoke_contract::<ExternalPayment, soroban_sdk::InvokeError>(
@@ -4727,7 +4840,7 @@ impl RefundContract {
             args,
         ) {
             Ok(Ok(payment)) => Ok(payment),
-            _ => Err(Error::InvalidPaymentId),
+            _ => Err(Error::Core(CoreError::InvalidPaymentId)),
         }
     }
 
@@ -4778,9 +4891,9 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
         let now = env.ledger().timestamp();
         let pause_state = if let Some(mut state) = env
@@ -4839,9 +4952,9 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
         if let Some(mut state) = env
             .storage()
@@ -4892,9 +5005,9 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
         let now = env.ledger().timestamp();
         let mut pause_state = if let Some(state) = env
@@ -4954,9 +5067,9 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
         if let Some(mut state) = env
             .storage()
@@ -5051,12 +5164,12 @@ impl RefundContract {
             .get::<SystemKey, PauseState>(&SystemKey::PauseStateKey)
         {
             if state.globally_paused {
-                return Err(Error::ContractPaused);
+                return Err(Error::Core(CoreError::ContractPaused));
             }
             let fn_str = String::from_str(env, function_name);
             for fn_name in state.paused_functions.iter() {
                 if fn_name == fn_str {
-                    return Err(Error::FunctionPaused);
+                    return Err(Error::Core(CoreError::FunctionPaused));
                 }
             }
         }
@@ -5075,9 +5188,9 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
         env.storage()
             .instance()
@@ -5119,9 +5232,9 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
         let mut state = Self::get_circuit_breaker_state(env.clone());
         state.tripped = false;
@@ -5225,7 +5338,7 @@ impl RefundContract {
             }
         }
         if limit.request_count >= limit.max_requests_per_window {
-            return Err(Error::RefundRateLimitExceeded);
+            return Err(Error::Core(CoreError::RefundRateLimitExceeded));
         }
         limit.request_count += 1;
         env.storage()
@@ -5273,10 +5386,10 @@ impl RefundContract {
                         TEST_RESETS_AT.with(|r| r.store(0, core::sync::atomic::Ordering::SeqCst));
                     }
                 } else {
-                    return Err(Error::CircuitBreakerTripped);
+                    return Err(Error::Core(CoreError::CircuitBreakerTripped));
                 }
             } else {
-                return Err(Error::CircuitBreakerTripped);
+                return Err(Error::Core(CoreError::CircuitBreakerTripped));
             }
         }
 
@@ -5343,7 +5456,7 @@ impl RefundContract {
                 tripped_at: now,
             }
             .publish(env);
-            return Err(Error::CircuitBreakerTripped);
+            return Err(Error::Core(CoreError::CircuitBreakerTripped));
         }
 
         env.storage()
@@ -5468,14 +5581,14 @@ impl RefundContract {
             .get(&DataKey::Admin)
             .expect("Admin not set");
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         let mut signal: FraudSignal = env
             .storage()
             .instance()
             .get(&SystemKey::FraudSignal(address.clone()))
-            .ok_or(Error::FraudSignalNotFound)?;
+            .ok_or(Error::Ext(ExtError::FraudSignalNotFound))?;
 
         signal.reviewed = true;
         env.storage()
@@ -5502,7 +5615,7 @@ impl RefundContract {
             .get(&DataKey::Admin)
             .expect("Admin not set");
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         env.storage()
@@ -5683,7 +5796,7 @@ impl RefundContract {
             ().into_val(env),
         ) {
             Ok(Ok(_)) => Ok(()),
-            _ => Err(Error::InvalidHookAddress),
+            _ => Err(Error::Ext(ExtError::InvalidHookAddress)),
         }
     }
 
@@ -5697,7 +5810,7 @@ impl RefundContract {
 
         // Check that at least one event is specified
         if events.is_empty() {
-            return Err(Error::InvalidAmount); // Reusing error for invalid input
+            return Err(Error::Core(CoreError::InvalidAmount)); // Reusing error for invalid input
         }
 
         Self::validate_notification_hook_subscriber(&env, &subscriber)?;
@@ -5711,7 +5824,7 @@ impl RefundContract {
                 .unwrap_or(0);
 
             if count >= Self::MAX_HOOKS_PER_EVENT {
-                return Err(Error::MaxHooksPerEventReached);
+                return Err(Error::Ext(ExtError::MaxHooksPerEventReached));
             }
         }
 
@@ -5796,11 +5909,11 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&SystemKey::NotificationHook(hook_id))
-            .ok_or(Error::HookNotFound)?;
+            .ok_or(Error::Ext(ExtError::HookNotFound))?;
 
         // Verify ownership
         if hook.subscriber != subscriber {
-            return Err(Error::HookNotOwnedBySubscriber);
+            return Err(Error::Ext(ExtError::HookNotOwnedBySubscriber));
         }
 
         // Mark as inactive
@@ -6016,7 +6129,7 @@ impl RefundContract {
 
         let key = EligibilityKey::Entry(merchant.clone(), customer.clone());
         if !env.storage().instance().has(&key) {
-            return Err(Error::EligibilityEntryNotFound);
+            return Err(Error::Ext(ExtError::EligibilityEntryNotFound));
         }
         env.storage().instance().remove(&key);
 
@@ -6160,13 +6273,13 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         if refund_ids.len() > Self::BATCH_DECISION_LIMIT {
-            return Err(Error::BatchRefundTooLarge);
+            return Err(Error::Core(CoreError::BatchRefundTooLarge));
         }
 
         let mut succeeded = Vec::new(&env);
@@ -6194,7 +6307,7 @@ impl RefundContract {
         let _ = note_hash;
 
         if had_failure {
-            return Err(Error::BatchRefundTooLarge);
+            return Err(Error::Core(CoreError::BatchRefundTooLarge));
         }
 
         Ok(BatchDecisionResult { succeeded, failed })
@@ -6214,9 +6327,9 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
         let cat_idx = category.to_index();
         let window = CategoryRefundWindow {
@@ -6256,7 +6369,7 @@ impl RefundContract {
             .instance()
             .has(&RefundExtKey::PaymentCategoryTag(payment_id))
         {
-            return Err(Error::AlreadyProcessed);
+            return Err(Error::Core(CoreError::AlreadyProcessed));
         }
         let cat_idx = category.to_index();
         env.storage()
@@ -6309,9 +6422,9 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         let arbitrators: Vec<Address> = env
@@ -6321,11 +6434,11 @@ impl RefundContract {
             .unwrap_or(Vec::new(&env));
 
         if arbitrators.is_empty() {
-            return Err(Error::ArbitratorNotFound);
+            return Err(Error::Ext(ExtError::ArbitratorNotFound));
         }
 
         if panel_size as u32 > arbitrators.len() {
-            return Err(Error::ArbitratorNotFound);
+            return Err(Error::Ext(ExtError::ArbitratorNotFound));
         }
 
         let config = ArbitratorAssignmentConfig {
@@ -6343,7 +6456,7 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&RefundExtKey::AssignmentConfig)
-            .ok_or(Error::PolicyNotFound)?;
+            .ok_or(Error::Core(CoreError::PolicyNotFound))?;
 
         let arbitrators: Vec<Address> = env
             .storage()
@@ -6352,12 +6465,12 @@ impl RefundContract {
             .unwrap_or(Vec::new(&env));
 
         if arbitrators.is_empty() {
-            return Err(Error::ArbitratorNotFound);
+            return Err(Error::Ext(ExtError::ArbitratorNotFound));
         }
 
         let total = arbitrators.len() as u32;
         if config.panel_size > total {
-            return Err(Error::ArbitratorNotFound);
+            return Err(Error::Ext(ExtError::ArbitratorNotFound));
         }
 
         let mut panel = Vec::new(&env);
@@ -6411,16 +6524,16 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         let mut config: ArbitratorAssignmentConfig = env
             .storage()
             .instance()
             .get(&RefundExtKey::AssignmentConfig)
-            .ok_or(Error::PolicyNotFound)?;
+            .ok_or(Error::Core(CoreError::PolicyNotFound))?;
 
         config.rotation_index = 0;
         env.storage()
@@ -6437,9 +6550,9 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         let cfg = RefundTTLConfig {
@@ -6457,16 +6570,16 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Refund(refund_id))
-            .ok_or(Error::RefundNotFound)?;
+            .ok_or(Error::Core(CoreError::RefundNotFound))?;
 
         if refund.status != RefundStatus::Requested {
-            return Err(Error::InvalidStatus);
+            return Err(Error::Core(CoreError::InvalidStatus));
         }
 
-        let expires_at = refund.expires_at.ok_or(Error::PolicyNotFound)?;
+        let expires_at = refund.expires_at.ok_or(Error::Core(CoreError::PolicyNotFound))?;
 
         if env.ledger().timestamp() < expires_at {
-            return Err(Error::RefundWindowExpired);
+            return Err(Error::Core(CoreError::RefundWindowExpired));
         }
 
         Self::remove_from_status_index(&env, RefundStatus::Requested, refund_id)?;
@@ -6535,10 +6648,10 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Refund(refund_id))
-            .ok_or(Error::RefundNotFound)?;
+            .ok_or(Error::Core(CoreError::RefundNotFound))?;
 
         if submitter != refund.customer && submitter != refund.merchant {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         if env
@@ -6546,7 +6659,7 @@ impl RefundContract {
             .instance()
             .has(&EvidenceKey::Evidence(refund_id, submitter.clone()))
         {
-            return Err(Error::EvidenceAlreadySubmitted);
+            return Err(Error::Ext(ExtError::EvidenceAlreadySubmitted));
         }
 
         let count: u64 = env
@@ -6621,9 +6734,9 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         let count: u64 = env
@@ -6665,16 +6778,16 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         let mut entry: SupportedRefundToken = env
             .storage()
             .instance()
             .get(&TokenKey::SupportedToken(token.clone()))
-            .ok_or(Error::RefundNotFound)?;
+            .ok_or(Error::Core(CoreError::RefundNotFound))?;
 
         entry.active = false;
         env.storage()
@@ -6724,16 +6837,16 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         let refund: Refund = env
             .storage()
             .instance()
             .get(&DataKey::Refund(refund_id))
-            .ok_or(Error::RefundNotFound)?;
+            .ok_or(Error::Core(CoreError::RefundNotFound))?;
 
         let counter: u64 = env
             .storage()
@@ -6791,16 +6904,16 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&VoucherKey::Voucher(voucher_id))
-            .ok_or(Error::VoucherNotFound)?;
+            .ok_or(Error::Ext(ExtError::VoucherNotFound))?;
 
         if voucher.customer != customer {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
         if voucher.redeemed {
-            return Err(Error::VoucherAlreadyRedeemed);
+            return Err(Error::Ext(ExtError::VoucherAlreadyRedeemed));
         }
         if env.ledger().timestamp() > voucher.expires_at {
-            return Err(Error::VoucherExpired);
+            return Err(Error::Ext(ExtError::VoucherExpired));
         }
 
         voucher.redeemed = true;
@@ -6856,9 +6969,9 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         let mut list: Vec<Address> = env
@@ -6885,9 +6998,9 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
         env.storage()
             .instance()
@@ -6901,31 +7014,31 @@ impl RefundContract {
             .instance()
             .has(&ArbitrationKey::CaseEscalated(case_id))
         {
-            return Err(Error::CaseAlreadyEscalated);
+            return Err(Error::Ext(ExtError::CaseAlreadyEscalated));
         }
 
         let mut case: ArbitrationCase = env
             .storage()
             .instance()
             .get(&ArbitrationKey::ArbitrationCase(case_id))
-            .ok_or(Error::RefundNotFound)?;
+            .ok_or(Error::Core(CoreError::RefundNotFound))?;
 
         if case.status != ArbitrationStatus::Open {
-            return Err(Error::InvalidStatus);
+            return Err(Error::Core(CoreError::InvalidStatus));
         }
 
         let config: ArbitrationTierConfig = env
             .storage()
             .instance()
             .get(&ArbitrationKey::ArbitrationTierConfig)
-            .ok_or(Error::CaseNotTimedOut)?;
+            .ok_or(Error::Core(CoreError::CaseNotTimedOut))?;
 
         if env.ledger().timestamp()
             < case
                 .created_at
                 .saturating_add(config.escalation_timeout_seconds)
         {
-            return Err(Error::CaseNotTimedOut);
+            return Err(Error::Core(CoreError::CaseNotTimedOut));
         }
 
         let senior_list: Vec<Address> = env
@@ -6935,7 +7048,7 @@ impl RefundContract {
             .unwrap_or(Vec::new(&env));
 
         if senior_list.len() == 0 {
-            return Err(Error::ArbitratorNotFound);
+            return Err(Error::Ext(ExtError::ArbitratorNotFound));
         }
 
         case.arbitrators = senior_list;
@@ -6975,13 +7088,13 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
 
         if cap.payment_id == 0 {
-            return Err(Error::InvalidPaymentId);
+            return Err(Error::Core(CoreError::InvalidPaymentId));
         }
 
         env.storage()
@@ -7027,13 +7140,13 @@ impl RefundContract {
 
         // Check count cap (only for Requested and Approved statuses)
         if current_count >= cap.max_refund_count {
-            return Err(Error::RefundCountCapExceeded);
+            return Err(Error::Ext(ExtError::RefundCountCapExceeded));
         }
 
         // Check amount cap (cumulative across all statuses except Rejected)
         let new_total_amount = current_amount.saturating_add(refund_amount);
         if new_total_amount > cap.max_total_amount {
-            return Err(Error::RefundAmountCapExceeded);
+            return Err(Error::Ext(ExtError::RefundAmountCapExceeded));
         }
 
         Ok(())
@@ -7057,7 +7170,7 @@ impl RefundContract {
 
     fn validate_bps(bps: u32) -> Result<(), Error> {
         if bps < 1 || bps > 10000 {
-            return Err(Error::InvalidAmount);
+            return Err(Error::Core(CoreError::InvalidAmount));
         };
 
         Ok(())
@@ -7076,9 +7189,9 @@ impl RefundContract {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .ok_or(Error::Unauthorized)?;
+            .ok_or(Error::Core(CoreError::Unauthorized))?;
         if admin != stored_admin {
-            return Err(Error::Unauthorized);
+            return Err(Error::Core(CoreError::Unauthorized));
         }
         env.storage()
             .instance()
@@ -7100,7 +7213,7 @@ impl RefundContract {
     ) -> Result<(), Error> {
         merchant.require_auth();
         if max_refund_bps > 10000 {
-            return Err(Error::InvalidAmount);
+            return Err(Error::Core(CoreError::InvalidAmount));
         }
         let cap = RefundCap { max_refund_bps };
         env.storage()

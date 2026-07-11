@@ -324,10 +324,10 @@ fn test_update_rate_limit_rejects_invalid_params() {
 
     assert_eq!(
         client.try_update_rate_limit(&admin, &0, &5),
-        Err(Ok(Error::InvalidAmount))
+        Err(Ok(Error::Core(CoreError::InvalidAmount)))
     );
     assert_eq!(
         client.try_update_rate_limit(&admin, &3600, &0),
-        Err(Ok(Error::InvalidAmount))
+        Err(Ok(Error::Core(CoreError::InvalidAmount)))
     );
 }

@@ -163,7 +163,7 @@ fn test_apply_inactive_policy_template_returns_template_inactive() {
     client.deactivate_policy_template(&admin, &template_id);
 
     let result = client.try_apply_template_to_merchant(&admin, &merchant, &template_id);
-    assert_eq!(result, Err(Ok(Error::TemplateInactive)));
+    assert_eq!(result, Err(Ok(Error::Ext(ExtError::TemplateInactive))));
 }
 
 #[test]
@@ -346,7 +346,7 @@ fn test_refund_window_expired_should_fail() {
         &payment_created_at,
     );
 
-    assert_eq!(result, Err(Ok(Error::RefundWindowExpired)));
+    assert_eq!(result, Err(Ok(Error::Core(CoreError::RefundWindowExpired))));
 }
 
 #[test]
@@ -386,7 +386,7 @@ fn test_refund_percentage_exceeds_policy_should_fail() {
         &env.ledger().timestamp(),
     );
 
-    assert_eq!(result, Err(Ok(Error::RefundExceedsPolicy)));
+    assert_eq!(result, Err(Ok(Error::Core(CoreError::RefundExceedsPolicy))));
 }
 
 #[test]
@@ -476,7 +476,7 @@ fn test_refund_with_inactive_policy_should_fail() {
         &env.ledger().timestamp(),
     );
 
-    assert_eq!(result, Err(Ok(Error::PolicyInactive)));
+    assert_eq!(result, Err(Ok(Error::Core(CoreError::PolicyInactive))));
 }
 
 #[test]
@@ -742,7 +742,7 @@ fn test_request_refund_returns_policy_not_found_when_no_policy_at_all() {
         &env.ledger().timestamp(),
     );
 
-    assert_eq!(result, Err(Ok(Error::PolicyNotFound)));
+    assert_eq!(result, Err(Ok(Error::Core(CoreError::PolicyNotFound))));
 }
 
 #[test]

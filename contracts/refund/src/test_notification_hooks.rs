@@ -1,7 +1,8 @@
 #![cfg(test)]
 
 use crate::{
-    Error, NotificationHook, RefundContract, RefundContractClient, RefundEventType, RefundStatus,
+    Error, ExtError, NotificationHook, RefundContract, RefundContractClient, RefundEventType,
+    RefundStatus,
 };
 use soroban_sdk::{
     contract, contractimpl, symbol_short, testutils::Address as _, Address, Env, String, Vec,
@@ -128,7 +129,7 @@ fn test_max_hooks_per_event() {
     events.push_back(RefundEventType::Requested);
 
     let result = client.try_register_notification_hook(&subscriber11, &events);
-    assert_eq!(result, Err(Ok(Error::MaxHooksPerEventReached)));
+    assert_eq!(result, Err(Ok(Error::Ext(ExtError::MaxHooksPerEventReached))));
 }
 
 #[test]
@@ -160,7 +161,7 @@ fn test_deregister_hook_not_owner() {
     // Try to deregister with different address
     let other_subscriber = register_mock_subscriber(&env);
     let result = client.try_deregister_hook(&other_subscriber, &hook_id);
-    assert_eq!(result, Err(Ok(Error::HookNotOwnedBySubscriber)));
+    assert_eq!(result, Err(Ok(Error::Ext(ExtError::HookNotOwnedBySubscriber))));
 }
 
 #[test]
@@ -168,7 +169,7 @@ fn test_deregister_nonexistent_hook() {
     let (_env, client, _admin, subscriber) = setup_test_env();
 
     let result = client.try_deregister_hook(&subscriber, &999);
-    assert_eq!(result, Err(Ok(Error::HookNotFound)));
+    assert_eq!(result, Err(Ok(Error::Ext(ExtError::HookNotFound))));
 }
 
 #[test]
@@ -404,7 +405,7 @@ fn test_register_notification_hook_invalid_address() {
     events.push_back(RefundEventType::Requested);
 
     let result = client.try_register_notification_hook(&invalid_subscriber, &events);
-    assert_eq!(result, Err(Ok(Error::InvalidHookAddress)));
+    assert_eq!(result, Err(Ok(Error::Ext(ExtError::InvalidHookAddress))));
 }
 
 #[test]
@@ -416,7 +417,7 @@ fn test_register_notification_hook_missing_ping() {
     events.push_back(RefundEventType::Requested);
 
     let result = client.try_register_notification_hook(&subscriber, &events);
-    assert_eq!(result, Err(Ok(Error::InvalidHookAddress)));
+    assert_eq!(result, Err(Ok(Error::Ext(ExtError::InvalidHookAddress))));
 }
 
 #[test]

@@ -3,7 +3,7 @@
 #![no_std]
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error, token,
-    Address, Bytes, BytesN, Env, FromVal, IntoVal, String, Symbol, TryFromVal, Val, Vec,
+    xdr::ToXdr, Address, Bytes, BytesN, Env, FromVal, IntoVal, String, Symbol, TryFromVal, Val, Vec,
 };
 
 #[derive(Clone)]
@@ -35,6 +35,7 @@ pub enum ConfigKey {
     TimeLockConfig,
     AdminClawbackEscrow(u64),
     SchemaVersion,
+    TrustedBridge(Address),
 }
 
 #[derive(Clone)]
@@ -136,7 +137,7 @@ pub enum BasicError {
     InvalidBps = 111,
     InsufficientAdmins = 112,
     InvalidAddress = 113,
-    SchemaAlreadyAtTarget = 112,
+    SchemaAlreadyAtTarget = 114,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -172,7 +173,7 @@ pub enum EscrowError {
     RenewalPeriodTooLong = 226,
     InvalidThreshold = 227,
     SuccessionPlanExists = 228,
-    ClawbackDelayTooShort = 227,
+    ClawbackDelayTooShort = 229,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -231,17 +232,13 @@ impl TryFrom<soroban_sdk::Error> for Error {
     fn try_from(error: soroban_sdk::Error) -> Result<Self, Self::Error> {
         if error.is_type(soroban_sdk::xdr::ScErrorType::Contract) {
             let code = error.get_code();
-            if code >= 300 && code <= 314 {
+            if code >= 300 && code <= 315 {
                 return Ok(Error::Action(unsafe { core::mem::transmute(code) }));
             }
-            if code >= 200 && code <= 228 {
+            if code >= 200 && code <= 229 {
                 return Ok(Error::Escrow(unsafe { core::mem::transmute(code) }));
             }
-            if code >= 100 && code <= 113 {
-            if code >= 200 && code <= 227 {
-                return Ok(Error::Escrow(unsafe { core::mem::transmute(code) }));
-            }
-            if code >= 100 && code <= 112 {
+            if code >= 100 && code <= 114 {
                 return Ok(Error::Basic(unsafe { core::mem::transmute(code) }));
             }
         }
@@ -1885,6 +1882,36 @@ impl EscrowContract {
         Ok(())
     }
 
+    // Registers another contract (e.g. the payment contract's bridge) as
+    // trusted to trigger an immediate `release_escrow` on completion, without
+    // being subject to the admin early-release timelock block below (that
+    // block exists to stop a lone human admin from self-servicing an early
+    // release; a registered bridge acting on an already-verified external
+    // completion event is a different trust boundary).
+    pub fn add_trusted_bridge(env: Env, caller: Address, bridge: Address) -> Result<(), Error> {
+        caller.require_auth();
+
+        let config: MultiSigConfig = env
+            .storage()
+            .instance()
+            .get(&DataKey::Config(ConfigKey::AdminMultiSig))
+            .ok_or(Error::Basic(BasicError::MultiSigNotInitialized))?;
+        if !config.admins.contains(&caller) {
+            return Err(Error::Basic(BasicError::NotAnAdmin));
+        }
+
+        env.storage()
+            .instance()
+            .set(&DataKey::Config(ConfigKey::TrustedBridge(bridge)), &true);
+        Ok(())
+    }
+
+    fn is_trusted_bridge(env: &Env, address: &Address) -> bool {
+        env.storage()
+            .instance()
+            .has(&DataKey::Config(ConfigKey::TrustedBridge(address.clone())))
+    }
+
     pub fn remove_admin(env: Env, caller: Address, admin: Address) -> Result<(), Error> {
         caller.require_auth();
 
@@ -3041,16 +3068,25 @@ impl EscrowContract {
 
         if EscrowContract::verify_observer_access(env.clone(), escrow_id, admin.clone()) {
             return Err(Error::Basic(BasicError::Unauthorized));
-        let config = Self::get_multisig_config(env.clone());
-        if !config.admins.contains(&admin) {
-            return Err(Error::Basic(BasicError::NotAnAdmin));
         }
 
-        // Check if this is being called from execute_queued_action
+        // A registered trusted bridge (e.g. the payment contract) is exempt
+        // from the admin/multisig checks below: it isn't a multisig admin,
+        // and its early releases are triggered by an already-verified
+        // completion event on the calling contract, not by a human admin
+        // self-servicing a bypass of the release timelock.
+        if !Self::is_trusted_bridge(&env, &admin) {
+            let config = Self::get_multisig_config(env.clone());
+            if !config.admins.contains(&admin) {
+                return Err(Error::Basic(BasicError::NotAnAdmin));
+            }
 
-        if config.admins.contains(&admin) && early_release {
-            // Admin force release requires time-lock
-            return Err(Error::Basic(BasicError::Unauthorized));
+            // Check if this is being called from execute_queued_action
+
+            if config.admins.contains(&admin) && early_release {
+                // Admin force release requires time-lock
+                return Err(Error::Basic(BasicError::Unauthorized));
+            }
         }
 
         Self::internal_release_escrow(env, admin, escrow_id, early_release, None)

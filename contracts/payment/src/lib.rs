@@ -225,7 +225,7 @@ pub enum FeatureError {
     ChannelNotExpired = 517,
     InvalidSplitShares = 518,
     TooManyRecipients = 519,
-    InvalidCounterparty = 530,
+    InvalidCounterparty = 540,
     SplitConfigNotFound = 520,
     SplitAlreadyExecuted = 521,
     LoyaltyNotConfigured = 522,
@@ -286,19 +286,19 @@ impl TryFrom<soroban_sdk::Error> for Error {
     fn try_from(error: soroban_sdk::Error) -> Result<Self, Self::Error> {
         if error.is_type(soroban_sdk::xdr::ScErrorType::Contract) {
             let code = error.get_code();
-            if code >= 500 && code <= 539 {
+            if code >= 500 && code <= 540 {
                 return Ok(Error::Feature(unsafe { core::mem::transmute(code) }));
             }
             if code >= 400 && code <= 406 {
                 return Ok(Error::Proposal(unsafe { core::mem::transmute(code) }));
             }
-            if code >= 300 && code <= 316 {
+            if code >= 300 && code <= 318 {
                 return Ok(Error::Subscription(unsafe { core::mem::transmute(code) }));
             }
             if code >= 200 && code <= 224 {
                 return Ok(Error::Payment(unsafe { core::mem::transmute(code) }));
             }
-            if code >= 100 && code <= 125 {
+            if code >= 100 && code <= 126 {
                 return Ok(Error::Basic(unsafe { core::mem::transmute(code) }));
             }
         }
@@ -2937,9 +2937,17 @@ impl PaymentContract {
         }
         PaymentContract::require_no_unresolved_escrowed_payment_dispute(&env, payment_id)?;
 
+        // Released as this contract's own identity (not the human `admin`),
+        // so the escrow contract can recognize it as a registered trusted
+        // bridge and allow an immediate release. See
+        // EscrowContract::add_trusted_bridge / is_trusted_bridge.
         let escrow_client = EscrowContractClient::new(&env, &bridge.escrow_contract);
         if escrow_client
-            .try_release_escrow(&admin, &bridge.escrow_id, &bridge.auto_release_on_complete)
+            .try_release_escrow(
+                &env.current_contract_address(),
+                &bridge.escrow_id,
+                &bridge.auto_release_on_complete,
+            )
             .is_err()
         {
             return Err(Error::Feature(FeatureError::EscrowBridgeFailed));
@@ -4520,13 +4528,17 @@ impl PaymentContract {
             .unwrap_or_else(|| Vec::new(&env))
     }
 
+    // Mirrors the refund contract's token-registry bypass (Issue #191): an
+    // empty allowlist means the allowlist hasn't been configured yet, so all
+    // tokens are permitted until an admin opts in by calling
+    // `add_allowed_token`.
     fn is_token_allowed(env: &Env, token: &Address) -> bool {
         let tokens: Vec<Address> = env
             .storage()
             .instance()
             .get(&DataKey::Config(ConfigKey::AllowedTokens))
             .unwrap_or_else(|| Vec::new(env));
-        tokens.contains(token)
+        tokens.is_empty() || tokens.contains(token)
     }
 
     const ACTIVE_SUBSCRIPTION_PAGE_SIZE: u64 = 100;

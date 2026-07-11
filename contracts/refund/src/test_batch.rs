@@ -108,12 +108,12 @@ fn batch_processes_valid_items_and_skips_invalid() {
     assert!(!approve_results.get(1).unwrap().success);
     assert_eq!(
         approve_results.get(1).unwrap().error_code,
-        Error::RefundNotFound as u32
+        Error::Core(CoreError::RefundNotFound).to_u32()
     );
     assert!(!approve_results.get(2).unwrap().success);
     assert_eq!(
         approve_results.get(2).unwrap().error_code,
-        Error::InvalidStatus as u32
+        Error::Core(CoreError::InvalidStatus).to_u32()
     );
     assert!(approve_results.get(3).unwrap().success);
 
@@ -135,12 +135,12 @@ fn batch_processes_valid_items_and_skips_invalid() {
     assert!(!process_results.get(0).unwrap().success);
     assert_eq!(
         process_results.get(0).unwrap().error_code,
-        Error::InvalidStatus as u32
+        Error::Core(CoreError::InvalidStatus).to_u32()
     );
     assert!(!process_results.get(1).unwrap().success);
     assert_eq!(
         process_results.get(1).unwrap().error_code,
-        Error::RefundNotFound as u32
+        Error::Core(CoreError::RefundNotFound).to_u32()
     );
     assert!(process_results.get(2).unwrap().success);
     assert!(process_results.get(3).unwrap().success);
@@ -172,7 +172,7 @@ fn batch_aborts_all_on_single_validation_failure() {
     assert!(!approve_results.get(0).unwrap().success);
     assert_eq!(
         approve_results.get(0).unwrap().error_code,
-        Error::BatchRefundTooLarge as u32
+        Error::Core(CoreError::BatchRefundTooLarge).to_u32()
     );
 
     // Batch-level rejection must not mutate any refund in the batch.
@@ -194,7 +194,7 @@ fn batch_aborts_all_on_single_validation_failure() {
     assert!(!process_results.get(0).unwrap().success);
     assert_eq!(
         process_results.get(0).unwrap().error_code,
-        Error::BatchRefundTooLarge as u32
+        Error::Core(CoreError::BatchRefundTooLarge).to_u32()
     );
 
     assert_eq!(refund_status(&client, r1), RefundStatus::Approved);
@@ -313,6 +313,6 @@ fn test_oversized_batch_rejected() {
     assert!(!results.get(0).unwrap().success);
     assert_eq!(
         results.get(0).unwrap().error_code,
-        Error::BatchRefundTooLarge as u32
+        Error::Core(CoreError::BatchRefundTooLarge).to_u32()
     );
 }
