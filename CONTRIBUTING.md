@@ -38,6 +38,18 @@ Before you begin, ensure you have:
    ```bash
    cargo test --workspace
    ```
+### Makefile Targets
+
+The root `Makefile` provides several helpful targets to streamline development. Run these using `make <target>`.
+
+| Target | Description | When to Use |
+|--------|-------------|-------------|
+| `build` | Compiles the smart contracts using `stellar contract build` and checks the WASM sizes. | Use this whenever you want to compile your code and verify the output artifacts don't exceed size limits. |
+| `test` | Runs the full `build` target, followed by `cargo test` to execute all tests. | Use this to verify that your contracts compile successfully and all tests pass. |
+| `fmt` | Runs `cargo fmt --all` to format the workspace code. | Use this before committing to ensure your code adheres to standard Rust formatting guidelines. |
+| `clean` | Runs `cargo clean` to remove the generated `target/` directory and build artifacts. | Use this to free up disk space or if you want to ensure a completely fresh build from scratch. |
+| `check-size` | Checks the size of compiled `.wasm` artifacts against the `262144` bytes limit. | Runs automatically during `make build`. Use this manually if you just want to verify sizes without recompiling. |
+
 
 ## 🔄 Development Workflow
 
