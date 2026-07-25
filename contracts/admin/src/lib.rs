@@ -25,6 +25,20 @@ pub struct AdminContract;
 
 #[contractimpl]
 impl AdminContract {
+    /// Initializes the admin contract with the addresses of the payment, escrow,
+    /// and refund contracts.
+    ///
+    /// # Parameters
+    /// - `admin`: the address authorized to manage the contract.
+    /// - `payment_contract`: the deployed payment contract address.
+    /// - `escrow_contract`: the deployed escrow contract address.
+    /// - `refund_contract`: the deployed refund contract address.
+    ///
+    /// # Returns
+    /// Returns `Ok(())` when initialization succeeds.
+    ///
+    /// # Errors
+    /// Returns `Error::AlreadyInitialized` if the contract has already been set up.
     pub fn initialize(
         env: Env,
         admin: Address,
@@ -51,9 +65,19 @@ impl AdminContract {
         Ok(())
     }
 
-    /// Pauses the payment, escrow, and refund contracts in a single Soroban
-    /// invocation so there is no window where one contract remains live
-    /// during an incident response.
+    /// Pauses the payment, escrow, and refund contracts in one Soroban call.
+    ///
+    /// # Parameters
+    /// - `admin`: the administrator address that must be authorized.
+    /// - `reason`: a human-readable explanation for the emergency pause.
+    ///
+    /// # Returns
+    /// Returns `Ok(())` when all child contracts are paused successfully.
+    ///
+    /// # Errors
+    /// Returns `Error::NotInitialized` if the admin contract has not been initialized,
+    /// and `Error::Unauthorized` if the provided admin address does not match the
+    /// stored administrator.
     pub fn emergency_pause_all(env: Env, admin: Address, reason: String) -> Result<(), Error> {
         admin.require_auth();
 
