@@ -2505,6 +2505,18 @@ impl EscrowContract {
             return Err(Error::Escrow(EscrowError::InvalidStatus));
         }
 
+        // Reject duplicate participant addresses so a single voter can't be
+        // registered twice and have their approval weight double-counted
+        // toward the release threshold.
+        for i in 0..participants.len() {
+            let addr_i = participants.get(i).unwrap().address;
+            for j in (i + 1)..participants.len() {
+                if participants.get(j).unwrap().address == addr_i {
+                    return Err(Error::Basic(BasicError::DuplicateApproval));
+                }
+            }
+        }
+
         // Ensure shares sum to 10000 bps
         let mut total_shares: u32 = 0;
         let mut total_weights: u32 = 0;
@@ -2605,6 +2617,13 @@ impl EscrowContract {
 
         if escrow.status != EscrowStatus::Locked {
             return Err(Error::Escrow(EscrowError::InvalidStatus));
+        }
+
+        // Authoritative dedup check: `approvals` records one entry per successful
+        // vote, independent of the per-participant `approved` flag below, so a
+        // caller can never be counted toward the release threshold twice.
+        if escrow.approvals.contains(&caller) {
+            return Err(Error::Basic(BasicError::DuplicateApproval));
         }
 
         // Locate caller in participants. Only participants with weight_bps > 0 may vote.

@@ -54,6 +54,9 @@ pub enum DataKey {
     MerchantRefundCount(Address),
     CustomerRefunds(Address, u64),
     CustomerRefundCount(Address),
+    // Issue: bound unbounded per-customer history growth by archiving old entries
+    CustomerRefundHistoryStart(Address),
+    CustomerRefundsArchive(Address, u64),
     PaymentRefunds(u64, u64),
     PaymentRefundCount(u64),
     PoolToken(u64),
@@ -114,6 +117,12 @@ pub enum PolicyKey {
     AutoRefundTrigger(u64),
     AutoRefundTriggerCounter,
 }
+
+// Maximum number of a customer's refund references kept in "hot" instance
+// storage. Older entries are moved to persistent storage (archived) so a
+// customer's history can grow indefinitely without bloating the instance
+// storage footprint read/written on every contract invocation.
+const CUSTOMER_HISTORY_HOT_CAP: u64 = 50;
 
 #[derive(Clone, Debug, PartialEq)]
 #[contracttype]
@@ -2867,84 +2876,7 @@ impl RefundContract {
         }
 
         // Handle stake return or forfeiture
-        let stake_opt: Option<ArbitrationStake> = env
-            .storage()
-            .instance()
-            .get(&ArbitrationKey::ArbitrationStake(case_id));
-
-        if let Some(mut stake) = stake_opt {
-            if !stake.returned {
-                let refund: Refund = env
-                    .storage()
-                    .instance()
-                    .get(&DataKey::Refund(case.refund_id))
-                    .unwrap();
-
-                let stake_config: Option<ArbitrationStakeConfig> = env
-                    .storage()
-                    .instance()
-                    .get(&ArbitrationKey::ArbitrationStakeConfig);
-
-                if let Some(stake_cfg) = stake_config {
-                    let stake_token_client = token::Client::new(&env, &stake_cfg.token);
-
-                    // Get treasury address from fee config
-                    let fee_config: Option<ArbitrationFeeConfig> = env
-                        .storage()
-                        .instance()
-                        .get(&ArbitrationKey::ArbitrationFeeConfig);
-
-                    // Determine if staker won or lost
-                    // Staker is the one who escalated (usually merchant after rejection)
-                    // If refund is approved, staker (merchant) lost
-                    // If refund is rejected (stays rejected), staker (merchant) won
-                    let staker_won = !approved;
-
-                    if staker_won {
-                        // Return stake to staker
-                        stake_token_client.transfer(
-                            &env.current_contract_address(),
-                            &stake.staker,
-                            &stake.amount,
-                        );
-
-                        StakeReturned {
-                            case_id,
-                            winner: stake.staker.clone(),
-                            amount: stake.amount,
-                        }
-                        .publish(&env);
-                    } else {
-                        // Forfeit stake to treasury (use fee config treasury or staker as fallback)
-                        let treasury_addr = if let Some(fee_cfg) = fee_config {
-                            fee_cfg.treasury_address
-                        } else {
-                            // Fallback: return to staker if no treasury configured
-                            stake.staker.clone()
-                        };
-
-                        stake_token_client.transfer(
-                            &env.current_contract_address(),
-                            &treasury_addr,
-                            &stake.amount,
-                        );
-
-                        StakeForfeited {
-                            case_id,
-                            loser: stake.staker.clone(),
-                            amount: stake.amount,
-                        }
-                        .publish(&env);
-                    }
-
-                    // Mark stake as returned
-                    stake.returned = true;
-                    env.storage()
-                        .instance()
-                        .set(&ArbitrationKey::ArbitrationStake(case_id), &stake);
-                }
-            }
-        }
+        Self::settle_arbitration_stake(&env, case_id, approved);
 
         // Update arbitrator reputations
         let case_duration = env.ledger().timestamp() - case.created_at;
@@ -3024,6 +2956,94 @@ impl RefundContract {
         ArbitrationCaseDecided { case_id, approved }.publish(&env);
 
         Ok(())
+    }
+
+    /// Returns a case's stake to the staker if they won, or forfeits it to the
+    /// treasury if they lost. Shared by both the quorum-vote resolution path
+    /// (`close_arbitration_case`) and the timeout-default path
+    /// (`trigger_arbitration_timeout`) so a staker can never permanently lose
+    /// their stake just because a case was resolved by timeout instead of vote.
+    ///
+    /// * `approved` - whether the arbitration outcome favors the customer
+    ///   (refund approved). The staker is the party that escalated the case
+    ///   (the merchant), so they "won" iff the outcome is NOT approved.
+    fn settle_arbitration_stake(env: &Env, case_id: u64, approved: bool) {
+        let stake_opt: Option<ArbitrationStake> = env
+            .storage()
+            .instance()
+            .get(&ArbitrationKey::ArbitrationStake(case_id));
+
+        let mut stake = match stake_opt {
+            Some(s) if !s.returned => s,
+            _ => return,
+        };
+
+        let stake_config: Option<ArbitrationStakeConfig> = env
+            .storage()
+            .instance()
+            .get(&ArbitrationKey::ArbitrationStakeConfig);
+
+        let stake_cfg = match stake_config {
+            Some(cfg) => cfg,
+            None => return,
+        };
+
+        let stake_token_client = token::Client::new(env, &stake_cfg.token);
+
+        // Get treasury address from fee config
+        let fee_config: Option<ArbitrationFeeConfig> = env
+            .storage()
+            .instance()
+            .get(&ArbitrationKey::ArbitrationFeeConfig);
+
+        // Determine if staker won or lost
+        // Staker is the one who escalated (usually merchant after rejection)
+        // If refund is approved, staker (merchant) lost
+        // If refund is rejected (stays rejected), staker (merchant) won
+        let staker_won = !approved;
+
+        if staker_won {
+            // Return stake to staker
+            stake_token_client.transfer(
+                &env.current_contract_address(),
+                &stake.staker,
+                &stake.amount,
+            );
+
+            StakeReturned {
+                case_id,
+                winner: stake.staker.clone(),
+                amount: stake.amount,
+            }
+            .publish(env);
+        } else {
+            // Forfeit stake to treasury (use fee config treasury or staker as fallback)
+            let treasury_addr = if let Some(fee_cfg) = fee_config {
+                fee_cfg.treasury_address
+            } else {
+                // Fallback: return to staker if no treasury configured
+                stake.staker.clone()
+            };
+
+            stake_token_client.transfer(
+                &env.current_contract_address(),
+                &treasury_addr,
+                &stake.amount,
+            );
+
+            StakeForfeited {
+                case_id,
+                loser: stake.staker.clone(),
+                amount: stake.amount,
+            }
+            .publish(env);
+        }
+
+        // Mark stake as returned
+        stake.returned = true;
+        env.storage()
+            .instance()
+            .set(&ArbitrationKey::ArbitrationStake(case_id), &stake);
     }
 
     /// Set the default timeout duration for arbitration cases.
@@ -3115,6 +3135,10 @@ impl RefundContract {
                 .instance()
                 .set(&DataKey::Refund(case.refund_id), &refund);
         }
+
+        // Handle stake return or forfeiture, same as the quorum-vote path —
+        // a case resolved by timeout must not leave the staker's funds stuck.
+        Self::settle_arbitration_stake(&env, case_id, approved);
 
         ArbitrationTimedOut {
             case_id,
@@ -5312,19 +5336,7 @@ impl RefundContract {
             &(merchant_count + 1),
         );
 
-        let customer_count: u64 = env
-            .storage()
-            .instance()
-            .get(&DataKey::CustomerRefundCount(customer.clone()))
-            .unwrap_or(0);
-        env.storage().instance().set(
-            &DataKey::CustomerRefunds(customer.clone(), customer_count),
-            &refund_id,
-        );
-        env.storage().instance().set(
-            &DataKey::CustomerRefundCount(customer.clone()),
-            &(customer_count + 1),
-        );
+        Self::append_customer_refund_history(&env, &customer, refund_id);
 
         let payment_count: u64 = env
             .storage()
@@ -6412,6 +6424,73 @@ impl RefundContract {
         refund_count
     }
 
+    /// Appends a refund id to a customer's history index, capping the number
+    /// of entries kept in "hot" instance storage. Once the cap is exceeded,
+    /// the oldest entry is moved to persistent storage so per-customer
+    /// history can grow without bound while the instance storage footprint
+    /// (loaded on every invocation) stays fixed.
+    fn append_customer_refund_history(env: &Env, customer: &Address, refund_id: u64) {
+        let customer_count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::CustomerRefundCount(customer.clone()))
+            .unwrap_or(0);
+
+        env.storage().instance().set(
+            &DataKey::CustomerRefunds(customer.clone(), customer_count),
+            &refund_id,
+        );
+        env.storage().instance().set(
+            &DataKey::CustomerRefundCount(customer.clone()),
+            &(customer_count + 1),
+        );
+
+        let start: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::CustomerRefundHistoryStart(customer.clone()))
+            .unwrap_or(0);
+        let hot_len = customer_count + 1 - start;
+        if hot_len > CUSTOMER_HISTORY_HOT_CAP {
+            if let Some(archived_id) = env
+                .storage()
+                .instance()
+                .get::<_, u64>(&DataKey::CustomerRefunds(customer.clone(), start))
+            {
+                env.storage().persistent().set(
+                    &DataKey::CustomerRefundsArchive(customer.clone(), start),
+                    &archived_id,
+                );
+            }
+            env.storage()
+                .instance()
+                .remove(&DataKey::CustomerRefunds(customer.clone(), start));
+            env.storage().instance().set(
+                &DataKey::CustomerRefundHistoryStart(customer.clone()),
+                &(start + 1),
+            );
+        }
+    }
+
+    /// Reads a customer's refund id at a given history index, transparently
+    /// falling back to the archive when the entry has aged out of hot storage.
+    fn get_customer_refund_id_at(env: &Env, customer: &Address, index: u64) -> Option<u64> {
+        let start: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::CustomerRefundHistoryStart(customer.clone()))
+            .unwrap_or(0);
+        if index < start {
+            env.storage()
+                .persistent()
+                .get(&DataKey::CustomerRefundsArchive(customer.clone(), index))
+        } else {
+            env.storage()
+                .instance()
+                .get(&DataKey::CustomerRefunds(customer.clone(), index))
+        }
+    }
+
     fn update_customer_refund_cooldown(env: &Env, customer: &Address) -> Result<(), Error> {
         let config: RefundCooldownConfig = match env
             .storage()
@@ -6468,11 +6547,7 @@ impl RefundContract {
                 continue;
             }
 
-            if let Some(refund_id) = env
-                .storage()
-                .instance()
-                .get::<_, u64>(&DataKey::CustomerRefunds(customer.clone(), index))
-            {
+            if let Some(refund_id) = Self::get_customer_refund_id_at(&env, &customer, index) {
                 if let Some(refund) = env
                     .storage()
                     .instance()
@@ -6502,11 +6577,7 @@ impl RefundContract {
 
         let mut index = 0u64;
         while index < total_requested {
-            if let Some(refund_id) = env
-                .storage()
-                .instance()
-                .get::<_, u64>(&DataKey::CustomerRefunds(customer.clone(), index))
-            {
+            if let Some(refund_id) = Self::get_customer_refund_id_at(&env, &customer, index) {
                 if let Some(refund) = env
                     .storage()
                     .instance()
