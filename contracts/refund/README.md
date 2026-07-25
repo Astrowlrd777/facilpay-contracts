@@ -16,6 +16,10 @@ make
 cargo test -p refund
 ```
 
+## ⚠️ Error Codes
+
+The refund contract defines a set of numeric error codes in [src/lib.rs](src/lib.rs). For a complete reference of every error variant, see [ERRORS.md](ERRORS.md).
+
 ## 📂 Public Functions
 
 ### Initialization & Schema
