@@ -106,6 +106,7 @@ pub enum DisputeKey {
     EscalationQueue(u64),
     EscalationQueueIndex,
     EscalationDeadline(u64),
+    AppealRecord(u64, u64),
 }
 
 #[derive(Clone)]
@@ -766,6 +767,24 @@ pub struct DisputeAppeal {
     pub filed_at: u64,
     pub appeal_deadline: u64,
     pub resolved: bool,
+}
+
+/// Persisted appeal record for compliance and audit purposes
+#[derive(Clone)]
+#[contracttype]
+pub struct AppealRecord {
+    pub appellant: Address,
+    pub filed_at: u64,
+    pub reason_code: String,
+    pub status: AppealStatus,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[contracttype]
+pub enum AppealStatus {
+    Pending,
+    Resolved,
+    Rejected,
 }
 
 #[contractevent]
@@ -4330,6 +4349,19 @@ impl EscrowContract {
             appeal_deadline,
             resolved: false,
         };
+
+        // Persist appeal record for compliance and audit purposes
+        let appeal_record = AppealRecord {
+            appellant: appellant.clone(),
+            filed_at: now,
+            reason_code: String::from_str(&env, "DISPUTE_APPEAL"),
+            status: AppealStatus::Pending,
+        };
+
+        env.storage().instance().set(
+            &DataKey::Dispute(DisputeKey::AppealRecord(escrow_id, appeal_id)),
+            &appeal_record,
+        );
 
         env.storage()
             .instance()
