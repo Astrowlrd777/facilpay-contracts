@@ -18,6 +18,18 @@ std::thread_local! {
 // to avoid LengthExceedsMax error from large #[contracttype] enums
 pub type StorageKey = (Symbol, Option<Address>, Option<u64>, Option<u32>);
 
+/// Construct a tuple-based storage key from its components.
+///
+/// Uses `Symbol::new` with `Env::default()` to create the prefix symbol.
+///
+/// # Arguments
+/// * `prefix` - A string prefix for the storage key.
+/// * `addr` - An optional address component.
+/// * `id` - An optional numeric ID component.
+/// * `sub_id` - An optional sub-ID component.
+///
+/// # Returns
+/// A `StorageKey` tuple suitable for use in contract storage.
 pub fn make_key(
     prefix: &str,
     addr: Option<Address>,
@@ -1295,6 +1307,13 @@ impl RefundContract {
     const BATCH_DECISION_LIMIT: u32 = 50;
     const INITIAL_SCHEMA_VERSION: u32 = 1;
 
+    /// Initialize the refund contract with an admin address.
+    ///
+    /// Sets up the default refund policy (30-day window, 100% refund),
+    /// admin approval settings, and appeal window.
+    ///
+    /// # Panics
+    /// Panics if the contract has already been initialized.
     pub fn initialize(env: Env, admin: Address) {
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("Already initialized");
@@ -1332,6 +1351,9 @@ impl RefundContract {
             .set(&DataKey::AppealWindowSeconds, &604800u64);
     }
 
+    /// Get the current schema version of the contract.
+    ///
+    /// Returns the schema version number. Defaults to `INITIAL_SCHEMA_VERSION` if not set.
     pub fn get_schema_version(env: Env) -> u32 {
         env.storage()
             .instance()
@@ -1339,6 +1361,15 @@ impl RefundContract {
             .unwrap_or(Self::INITIAL_SCHEMA_VERSION)
     }
 
+    /// Migrate the contract schema to a new version.
+    ///
+    /// # Arguments
+    /// * `admin` - The admin address (must be authorized and match stored admin).
+    /// * `target_version` - The target schema version to migrate to.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the admin.
+    /// Returns `SchemaAlreadyAtTarget` if the current version is already at or past the target.
     pub fn migrate_schema(env: Env, admin: Address, target_version: u32) -> Result<(), Error> {
         admin.require_auth();
         let stored_admin: Address = env
@@ -1361,6 +1392,28 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Request a refund for a payment.
+    ///
+    /// Creates a new refund request with status `Requested` (or `Approved` if auto-approval
+    /// conditions are met). Validates the token, policy, fraud signals, and eligibility.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant requesting the refund (must be authorized).
+    /// * `payment_id` - The ID of the original payment.
+    /// * `customer` - The customer receiving the refund.
+    /// * `amount` - The refund amount in the smallest token unit.
+    /// * `original_payment_amount` - The original payment amount.
+    /// * `token` - The token address used for the refund.
+    /// * `reason` - A human-readable reason for the refund.
+    /// * `reason_code` - A canonical reason code for the refund.
+    /// * `payment_created_at` - The timestamp when the original payment was created.
+    ///
+    /// # Returns
+    /// The ID of the newly created refund.
+    ///
+    /// # Errors
+    /// Returns errors for invalid amounts, unsupported tokens, policy violations,
+    /// fraud signals, eligibility blocks, or payment ownership mismatches.
     pub fn request_refund(
         env: Env,
         merchant: Address,
@@ -1408,6 +1461,16 @@ impl RefundContract {
         )
     }
 
+    /// Retrieve a refund by its ID.
+    ///
+    /// # Arguments
+    /// * `refund_id` - The unique identifier of the refund.
+    ///
+    /// # Returns
+    /// The `Refund` record if found.
+    ///
+    /// # Errors
+    /// Returns `RefundNotFound` if no refund exists with the given ID.
     pub fn get_refund(env: &Env, refund_id: u64) -> Result<Refund, Error> {
         // Retrieve refund from storage by ID
         env.storage()
@@ -1416,6 +1479,18 @@ impl RefundContract {
             .ok_or(Error::Core(CoreError::RefundNotFound))
     }
 
+    /// Approve a pending refund request.
+    ///
+    /// Changes the refund status from `Requested` to `Approved` and emits a `RefundApproved` event.
+    ///
+    /// # Arguments
+    /// * `admin` - The admin address (must be authorized).
+    /// * `refund_id` - The ID of the refund to approve.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the admin.
+    /// Returns `InvalidStatus` if the refund is not in `Requested` status.
+    /// Returns `RefundWindowExpired` if the refund's TTL has expired.
     pub fn approve_refund(env: Env, admin: Address, refund_id: u64) -> Result<(), Error> {
         // Require admin authentication
         admin.require_auth();
@@ -1423,6 +1498,19 @@ impl RefundContract {
         Self::approve_refund_internal(&env, admin, refund_id)
     }
 
+    /// Reject a pending refund request.
+    ///
+    /// Moves the refund to `PendingAppeal` status with an appeal window, and emits a
+    /// `RefundRejected` event. The customer can file an appeal within the appeal window.
+    ///
+    /// # Arguments
+    /// * `admin` - The admin address (must be authorized).
+    /// * `refund_id` - The ID of the refund to reject.
+    /// * `rejection_reason` - A human-readable reason for the rejection.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the admin.
+    /// Returns `InvalidStatus` if the refund is not in `Requested` status.
     pub fn reject_refund(
         env: Env,
         admin: Address,
@@ -1435,6 +1523,18 @@ impl RefundContract {
         Self::begin_refund_rejection(&env, admin, refund_id, rejection_reason)
     }
 
+    /// Finalize a denied refund after its appeal window has expired.
+    ///
+    /// Moves the refund from `PendingAppeal` to `Rejected` status if the appeal window
+    /// has elapsed, and emits a `RefundRejected` event.
+    ///
+    /// # Arguments
+    /// * `refund_id` - The ID of the refund to finalize.
+    ///
+    /// # Errors
+    /// Returns `RefundNotFound` if the refund does not exist.
+    /// Returns `RefundNotRejected` if the refund is not in `PendingAppeal` status.
+    /// Returns `InvalidStatus` if the appeal window has not yet expired.
     pub fn finalize_denial(env: Env, refund_id: u64) -> Result<(), Error> {
         let mut refund: Refund = env
             .storage()
@@ -1529,6 +1629,24 @@ impl RefundContract {
         Ok(())
     }
 
+    /// File an appeal against a rejected or pending-appeal refund.
+    ///
+    /// Creates a new appeal record and emits an `AppealFiled` event. The customer
+    /// must be the refund's customer and the refund must be in a rejected/pending-appeal state.
+    ///
+    /// # Arguments
+    /// * `customer` - The customer filing the appeal (must be authorized).
+    /// * `refund_id` - The ID of the refund being appealed.
+    /// * `reason` - A human-readable reason for the appeal.
+    ///
+    /// # Returns
+    /// The ID of the newly created appeal.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the refund's customer.
+    /// Returns `RefundNotRejected` if the refund is not in an appealable state.
+    /// Returns `AppealAlreadyFiled` if an appeal already exists for this refund.
+    /// Returns `AppealWindowExpired` if the appeal window has passed.
     pub fn file_appeal(
         env: Env,
         customer: Address,
@@ -1632,6 +1750,20 @@ impl RefundContract {
         Ok(appeal_id)
     }
 
+    /// Resolve an appeal by upholding or denying it.
+    ///
+    /// If upheld, the refund is approved and processed. If denied, the rejection becomes final.
+    /// Emits an `AppealResolved` event.
+    ///
+    /// # Arguments
+    /// * `admin` - The admin address (must be authorized and be the contract admin).
+    /// * `appeal_id` - The ID of the appeal to resolve.
+    /// * `uphold` - `true` to uphold the appeal (approve refund), `false` to deny.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the admin.
+    /// Returns `AlreadyProcessed` if the appeal is already resolved.
+    /// Returns `RefundNotFound` if the appeal or refund does not exist.
     pub fn resolve_appeal(
         env: Env,
         admin: Address,
@@ -1720,6 +1852,16 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Retrieve an appeal by its ID.
+    ///
+    /// # Arguments
+    /// * `appeal_id` - The unique identifier of the appeal.
+    ///
+    /// # Returns
+    /// The `RefundAppeal` record if found.
+    ///
+    /// # Errors
+    /// Returns `RefundNotFound` if no appeal exists with the given ID.
     pub fn get_appeal(env: Env, appeal_id: u64) -> Result<RefundAppeal, Error> {
         env.storage()
             .instance()
@@ -1727,6 +1869,13 @@ impl RefundContract {
             .ok_or(Error::Core(CoreError::RefundNotFound))
     }
 
+    /// Get all appeals filed by a specific customer.
+    ///
+    /// # Arguments
+    /// * `customer` - The customer address to query appeals for.
+    ///
+    /// # Returns
+    /// A vector of `RefundAppeal` records filed by the customer.
     pub fn get_appeals_by_customer(env: Env, customer: Address) -> Vec<RefundAppeal> {
         let mut appeals = Vec::new(&env);
         let count: u64 = env
@@ -1756,12 +1905,44 @@ impl RefundContract {
         appeals
     }
 
+    /// Process an approved refund for payout.
+    ///
+    /// Changes the refund status from `Approved` to `Processed`, deducts platform fees,
+    /// enforces merchant refund quota, and emits a `RefundProcessed` event.
+    ///
+    /// # Arguments
+    /// * `admin` - The admin address (must be authorized).
+    /// * `refund_id` - The ID of the refund to process.
+    ///
+    /// # Errors
+    /// Returns `InvalidStatus` if the refund is not in `Approved` status.
+    /// Returns `RefundExceedsPolicy` if the merchant quota is exceeded.
+    /// Returns `TotalRefundsExceedPayment` if processing would exceed the original payment.
     pub fn process_refund(env: Env, admin: Address, refund_id: u64) -> Result<(), Error> {
         admin.require_auth();
 
         Self::process_refund_internal(&env, admin, refund_id)
     }
 
+    /// Register an automatic refund trigger for a payment.
+    ///
+    /// Creates a trigger that automatically initiates a refund when a condition is met
+    /// (e.g., fulfillment timeout or contract state match).
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant registering the trigger (must be authorized).
+    /// * `payment_id` - The payment ID to attach the trigger to.
+    /// * `condition` - The condition that triggers the automatic refund.
+    /// * `refund_bps` - The refund amount in basis points of the original payment (1-10000).
+    ///
+    /// # Returns
+    /// The ID of the newly created trigger.
+    ///
+    /// # Errors
+    /// Returns `InvalidPaymentId` if `payment_id` is 0.
+    /// Returns `RefundExceedsPolicy` if `refund_bps` is out of valid range.
+    /// Returns `Unauthorized` if the caller is not the payment's merchant.
+    /// Returns `DuplicateAutoRefundTrigger` if an identical active trigger exists.
     pub fn register_auto_refund_trigger(
         env: Env,
         merchant: Address,
@@ -1832,6 +2013,19 @@ impl RefundContract {
         Ok(new_trigger_id)
     }
 
+    /// Evaluate an automatic refund trigger and execute it if the condition is met.
+    ///
+    /// Checks the trigger's condition, creates and processes a refund if satisfied,
+    /// and deactivates the trigger. Emits an `AutoRefundTriggered` event.
+    ///
+    /// # Arguments
+    /// * `trigger_id` - The ID of the trigger to evaluate.
+    ///
+    /// # Returns
+    /// `true` if the refund was triggered, `false` otherwise.
+    ///
+    /// # Errors
+    /// Returns `InvalidAmount` if the calculated refund amount is non-positive.
     pub fn evaluate_auto_refund(env: Env, trigger_id: u64) -> Result<bool, Error> {
         let mut trigger = Self::get_auto_refund_trigger(env.clone(), trigger_id)?;
         if !trigger.active {
@@ -1883,6 +2077,16 @@ impl RefundContract {
         Ok(true)
     }
 
+    /// Get an automatic refund trigger by its ID.
+    ///
+    /// # Arguments
+    /// * `trigger_id` - The unique identifier of the trigger.
+    ///
+    /// # Returns
+    /// The `AutoRefundTrigger` record if found.
+    ///
+    /// # Errors
+    /// Returns `AutoRefundTriggerNotFound` if no trigger exists with the given ID.
     pub fn get_auto_refund_trigger(env: Env, trigger_id: u64) -> Result<AutoRefundTrigger, Error> {
         env.storage()
             .instance()
@@ -1890,6 +2094,18 @@ impl RefundContract {
             .ok_or(Error::Ext(ExtError::AutoRefundTriggerNotFound))
     }
 
+    /// Set a refund quota for a merchant within a time period.
+    ///
+    /// Limits the total refund amount a merchant can process within the specified period.
+    ///
+    /// # Arguments
+    /// * `admin` - The admin address (must be authorized).
+    /// * `merchant` - The merchant to set the quota for.
+    /// * `limit` - The maximum refund amount allowed in the period.
+    /// * `period_seconds` - The duration of the quota period in seconds.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the admin.
     pub fn set_merchant_refund_quota(
         env: Env,
         admin: Address,
@@ -1920,12 +2136,28 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Get the refund quota configuration for a merchant.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant address to query.
+    ///
+    /// # Returns
+    /// The `MerchantRefundQuota` if configured, `None` otherwise.
     pub fn get_merchant_refund_quota(env: Env, merchant: Address) -> Option<MerchantRefundQuota> {
         env.storage()
             .instance()
             .get(&DataKey::MerchantRefundQuota(merchant))
     }
 
+    /// Reset a merchant's refund quota usage counter to zero and restart the quota period.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin executing the reset.
+    /// * `merchant` - The merchant whose quota should be reset.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
+    /// Returns `PolicyNotFound` if no quota is configured for the merchant.
     pub fn reset_merchant_quota(env: Env, admin: Address, merchant: Address) -> Result<(), Error> {
         admin.require_auth();
         let stored_admin: Address = env
@@ -1950,6 +2182,16 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Set a custom per-customer refund rate limit that overrides the global limit.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin setting the limit.
+    /// * `customer` - The customer address to apply the limit to.
+    /// * `max_per_window` - Maximum number of refund requests allowed per window.
+    /// * `window_seconds` - Duration of the rate-limit window in seconds.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
     pub fn set_customer_rate_limit(
         env: Env,
         admin: Address,
@@ -1982,6 +2224,14 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Get the current rate-limit status for a customer, including request count and window info.
+    ///
+    /// # Arguments
+    /// * `customer` - The customer address to query.
+    ///
+    /// # Returns
+    /// The `CustomerRefundRateLimit` for the customer. Returns a default zero-value
+    /// if no limit has been configured.
     pub fn get_customer_rate_limit_status(env: Env, customer: Address) -> CustomerRefundRateLimit {
         env.storage()
             .instance()
@@ -1996,6 +2246,16 @@ impl RefundContract {
             })
     }
 
+    /// Set the global refund rate limit that applies to all customers by default.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin setting the limit.
+    /// * `max_per_window` - Maximum number of refund requests allowed per window.
+    /// * `window_seconds` - Duration of the rate-limit window in seconds.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
+    /// Returns `InvalidAmount` if either parameter is zero.
     pub fn set_global_refund_rate_limit(
         env: Env,
         admin: Address,
@@ -2073,12 +2333,25 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Get the current global refund rate limit configuration.
+    ///
+    /// # Returns
+    /// The `GlobalRefundRateLimit` if configured, `None` otherwise.
     pub fn get_global_refund_rate_limit(env: Env) -> Option<GlobalRefundRateLimit> {
         env.storage()
             .instance()
             .get(&DataKey::GlobalRefundRateLimit)
     }
 
+    /// Register a new arbitrator and initialize their reputation score.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin performing the registration.
+    /// * `arbitrator` - The address of the arbitrator to register.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
+    /// Returns `Unauthorized` if the arbitrator is already registered.
     pub fn register_arbitrator(env: Env, admin: Address, arbitrator: Address) -> Result<(), Error> {
         admin.require_auth();
         let stored_admin = env
@@ -2120,6 +2393,18 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Manually assign an arbitrator to an open arbitration case.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin performing the assignment.
+    /// * `case_id` - The ID of the arbitration case.
+    /// * `arbitrator` - The address of the arbitrator to assign.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
+    /// Returns `RefundNotFound` if the case does not exist.
+    /// Returns `InvalidStatus` if the case is not in `Open` status.
+    /// Returns `NotArbitrator` if the address is not a registered arbitrator.
     pub fn assign_arbitrator(
         env: Env,
         admin: Address,
@@ -2177,6 +2462,25 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Escalate a rejected refund to the arbitration panel for review.
+    ///
+    /// Transfers the arbitration fee from the caller and, if staking is enabled,
+    /// also transfers the required stake. Creates an `Open` arbitration case
+    /// assigned to all registered arbitrators.
+    ///
+    /// # Arguments
+    /// * `caller` - The customer or party escalating the dispute.
+    /// * `refund_id` - The ID of the rejected refund to escalate.
+    /// * `fee_token` - The token address used to pay the arbitration fee.
+    /// * `fee_amount` - The amount of the arbitration fee.
+    ///
+    /// # Returns
+    /// The newly created arbitration case ID.
+    ///
+    /// # Errors
+    /// Returns `InvalidStatus` if the refund is not in `Rejected` or `PendingAppeal` status.
+    /// Returns `InvalidAmount` if `fee_amount` is not positive.
+    /// Returns `QuorumNotReached` if fewer than 3 arbitrators are registered.
     pub fn escalate_to_arbitration(
         env: Env,
         caller: Address,
@@ -2307,6 +2611,19 @@ impl RefundContract {
         Ok(case_id)
     }
 
+    /// Cast a vote on an open arbitration case.
+    ///
+    /// # Arguments
+    /// * `arbitrator` - The arbitrator casting the vote.
+    /// * `case_id` - The ID of the arbitration case.
+    /// * `vote_for_refund` - `true` to vote in favor of the refund, `false` to vote against.
+    /// * `reasoning_hash` - SHA-256 hash of the arbitrator's reasoning document.
+    ///
+    /// # Errors
+    /// Returns `InvalidStatus` if the case is not open or the deadline has passed.
+    /// Returns `NotArbitrator` if the caller is not an assigned arbitrator for this case.
+    /// Returns `AlreadyProcessed` if the arbitrator has already voted on this case.
+    /// Returns `Unauthorized` if the arbitrator is the merchant or customer of the refund.
     pub fn cast_arbitration_vote(
         env: Env,
         arbitrator: Address,
@@ -2389,6 +2706,18 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Close an arbitration case once quorum has been reached and tally votes.
+    ///
+    /// Requires at least 3 total votes. The refund is approved if the majority
+    /// voted in favor, otherwise it is rejected. Also updates the arbitrator
+    /// reputation scores based on majority/minority alignment.
+    ///
+    /// # Arguments
+    /// * `case_id` - The ID of the arbitration case to close.
+    ///
+    /// # Errors
+    /// Returns `RefundNotFound` if the case does not exist.
+    /// Returns `InvalidStatus` if the case is not open or quorum (3 votes) has not been reached.
     pub fn close_arbitration_case(env: Env, case_id: u64) -> Result<(), Error> {
         let mut case: ArbitrationCase = env
             .storage()
@@ -2697,6 +3026,14 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Set the default timeout duration for arbitration cases.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin setting the timeout.
+    /// * `timeout_seconds` - The timeout duration in seconds (default is 14 days).
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
     pub fn set_arbitration_timeout(
         env: Env,
         admin: Address,
@@ -2717,6 +3054,10 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Get the current arbitration timeout configuration in seconds.
+    ///
+    /// # Returns
+    /// The timeout duration in seconds. Defaults to 1,209,600 (14 days) if not configured.
     pub fn get_arbitration_timeout_config(env: Env) -> u64 {
         env.storage()
             .instance()
@@ -2724,6 +3065,18 @@ impl RefundContract {
             .unwrap_or(86400 * 14)
     }
 
+    /// Trigger a timeout on an arbitration case that has exceeded its deadline.
+    ///
+    /// If quorum has not been reached and the timeout has elapsed, the case is
+    /// resolved with the default outcome (typically favoring the customer).
+    ///
+    /// # Arguments
+    /// * `case_id` - The ID of the arbitration case to time out.
+    ///
+    /// # Errors
+    /// Returns `RefundNotFound` if the case does not exist.
+    /// Returns `InvalidStatus` if the case is not open or quorum was already reached.
+    /// Returns `CaseNotTimedOut` if the timeout has not yet elapsed.
     pub fn trigger_arbitration_timeout(env: Env, case_id: u64) -> Result<(), Error> {
         let mut case: ArbitrationCase = env
             .storage()
@@ -2814,6 +3167,19 @@ impl RefundContract {
         .publish(env);
     }
 
+    /// Create a reusable refund policy template that can be applied to merchants.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin creating the template.
+    /// * `name` - A human-readable name for the template.
+    /// * `tiers` - A vector of `(days_from_purchase, max_refund_bps)` tuples defining the refund tiers.
+    /// * `window` - The default refund window in seconds.
+    ///
+    /// # Returns
+    /// The ID of the newly created template.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
     pub fn create_policy_template(
         env: Env,
         admin: Address,
@@ -2861,6 +3227,17 @@ impl RefundContract {
         Ok(template_id)
     }
 
+    /// Apply a policy template to a merchant, replacing their current refund policy.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin applying the template.
+    /// * `merchant` - The merchant to apply the template to.
+    /// * `template_id` - The ID of the template to apply.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
+    /// Returns `TemplateNotFound` if the template does not exist.
+    /// Returns `TemplateInactive` if the template has been deactivated.
     pub fn apply_template_to_merchant(
         env: Env,
         admin: Address,
@@ -2917,12 +3294,23 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Get a policy template by its ID.
+    ///
+    /// # Arguments
+    /// * `template_id` - The ID of the template to retrieve.
+    ///
+    /// # Returns
+    /// The `RefundPolicyTemplate` if found, `None` otherwise.
     pub fn get_policy_template(env: Env, template_id: u64) -> Option<RefundPolicyTemplate> {
         env.storage()
             .instance()
             .get(&DataKey::RefundPolicyTemplate(template_id))
     }
 
+    /// List all active refund policy templates.
+    ///
+    /// # Returns
+    /// A vector of all active `RefundPolicyTemplate` entries.
     pub fn list_policy_templates(env: Env) -> Vec<RefundPolicyTemplate> {
         let count: u64 = env
             .storage()
@@ -2944,6 +3332,16 @@ impl RefundContract {
         templates
     }
 
+    /// Deactivate a refund policy template so it can no longer be applied.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin deactivating the template.
+    /// * `template_id` - The ID of the template to deactivate.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
+    /// Returns `TemplateNotFound` if the template does not exist.
+    /// Returns `TemplateInactive` if the template is already inactive.
     pub fn deactivate_policy_template(
         env: Env,
         admin: Address,
@@ -3117,6 +3515,16 @@ impl RefundContract {
         Ok(removed_count)
     }
 
+    /// Retrieve the details of an arbitration case by its ID.
+    ///
+    /// # Arguments
+    /// * `case_id` - The ID of the arbitration case to retrieve.
+    ///
+    /// # Returns
+    /// The `ArbitrationCase` details.
+    ///
+    /// # Errors
+    /// Returns `RefundNotFound` if the case does not exist.
     pub fn get_arbitration_case(env: Env, case_id: u64) -> Result<ArbitrationCase, Error> {
         env.storage()
             .instance()
@@ -3281,6 +3689,15 @@ impl RefundContract {
             .get(&ArbitrationKey::ArbitrationStake(case_id))
     }
 
+    /// Get a paginated list of refunds filtered by status.
+    ///
+    /// # Arguments
+    /// * `status` - The refund status to filter by.
+    /// * `limit` - Maximum number of results to return.
+    /// * `offset` - Number of results to skip for pagination.
+    ///
+    /// # Returns
+    /// A vector of `Refund` entries matching the given status.
     pub fn get_refunds_by_status(
         env: &Env,
         status: RefundStatus,
@@ -3316,6 +3733,15 @@ impl RefundContract {
         results
     }
 
+    /// Get a paginated list of all refunds for a specific merchant.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant address to query.
+    /// * `limit` - Maximum number of results to return.
+    /// * `offset` - Number of results to skip for pagination.
+    ///
+    /// # Returns
+    /// A vector of `Refund` entries for the merchant.
     pub fn get_merchant_refunds(
         env: Env,
         merchant: Address,
@@ -3351,6 +3777,16 @@ impl RefundContract {
         results
     }
 
+    /// Get a paginated list of refunds for a merchant filtered by status.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant address to query.
+    /// * `status` - The refund status to filter by.
+    /// * `limit` - Maximum number of results to return.
+    /// * `offset` - Number of results to skip for pagination.
+    ///
+    /// # Returns
+    /// A vector of `Refund` entries matching the merchant and status.
     pub fn get_merchant_refunds_by_status(
         env: Env,
         merchant: Address,
@@ -3361,6 +3797,13 @@ impl RefundContract {
         Self::get_merchant_refunds_by_status_internal(&env, &merchant, status, limit, offset)
     }
 
+    /// Get all pending (requested) refunds for a merchant.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant address to query.
+    ///
+    /// # Returns
+    /// A vector of all `Refund` entries in `Requested` status for the merchant.
     pub fn get_merchant_pending_refunds(env: Env, merchant: Address) -> Vec<Refund> {
         let total = Self::get_merchant_refund_count(&env, &merchant);
         Self::get_merchant_refunds_by_status_internal(
@@ -3372,6 +3815,14 @@ impl RefundContract {
         )
     }
 
+    /// Get aggregate refund statistics for a merchant.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant address to query.
+    ///
+    /// # Returns
+    /// A `MerchantRefundSummary` containing total requests, approved/rejected counts,
+    /// total refunded amount, and pending counts/amounts.
     pub fn get_merchant_refund_summary(env: Env, merchant: Address) -> MerchantRefundSummary {
         let total_requests = Self::get_merchant_refund_count(&env, &merchant);
         let mut total_approved = 0u64;
@@ -3426,6 +3877,15 @@ impl RefundContract {
         }
     }
 
+    /// Get a paginated list of refunds filtered by reason code.
+    ///
+    /// # Arguments
+    /// * `code` - The refund reason code to filter by.
+    /// * `limit` - Maximum number of results to return.
+    /// * `offset` - Number of results to skip for pagination.
+    ///
+    /// # Returns
+    /// A vector of `Refund` entries matching the given reason code.
     pub fn get_refunds_by_reason_code(
         env: &Env,
         code: RefundReasonCode,
@@ -3466,6 +3926,10 @@ impl RefundContract {
         results
     }
 
+    /// Get analytics showing the count of refunds for each reason code, sorted by frequency.
+    ///
+    /// # Returns
+    /// A vector of `(RefundReasonCode, count)` tuples sorted by descending count.
     pub fn get_reason_code_analytics(env: Env) -> Vec<(RefundReasonCode, u64)> {
         let mut product_defect: u64 = 0;
         let mut non_delivery: u64 = 0;
@@ -3524,6 +3988,13 @@ impl RefundContract {
         result
     }
 
+    /// Get the total number of refunds in a given status.
+    ///
+    /// # Arguments
+    /// * `status` - The refund status to count.
+    ///
+    /// # Returns
+    /// The count of refunds in the specified status.
     pub fn get_refund_count_by_status(env: &Env, status: RefundStatus) -> u64 {
         env.storage()
             .instance()
@@ -3531,6 +4002,13 @@ impl RefundContract {
             .unwrap_or(0)
     }
 
+    /// Get the cumulative amount that has been refunded for a given payment.
+    ///
+    /// # Arguments
+    /// * `payment_id` - The payment ID to calculate the total for.
+    ///
+    /// # Returns
+    /// The total refunded amount in the smallest denomination of the token.
     pub fn get_total_refunded_amount(env: &Env, payment_id: u64) -> i128 {
         let total_refunds: u64 = env
             .storage()
@@ -3556,6 +4034,18 @@ impl RefundContract {
         total
     }
 
+    /// Check whether a refund request for a given payment would exceed the original payment amount.
+    ///
+    /// # Arguments
+    /// * `payment_id` - The payment ID to check.
+    /// * `requested_amount` - The refund amount being requested.
+    /// * `original_amount` - The original payment amount.
+    ///
+    /// # Returns
+    /// `Ok(true)` if the refund is allowed.
+    ///
+    /// # Errors
+    /// Returns `TotalRefundsExceedsPayment` if the cumulative refunds would exceed the original amount.
     pub fn can_refund_payment(
         env: &Env,
         payment_id: u64,
@@ -3593,6 +4083,17 @@ impl RefundContract {
         sorted
     }
 
+    /// Set a refund policy for a merchant with tiered refund rules.
+    ///
+    /// Tiers are sorted by `days_from_purchase` in ascending order. Each tier
+    /// specifies the maximum refund percentage (in basis points) within its time window.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant setting the policy (must authenticate).
+    /// * `tiers` - A vector of `RefundTier` entries defining the policy tiers.
+    ///
+    /// # Errors
+    /// Returns `RefundExceedsPolicy` if any tier has an invalid `max_refund_bps` value.
     pub fn set_refund_policy(
         env: Env,
         merchant: Address,
@@ -3659,6 +4160,14 @@ impl RefundContract {
 
     // ── Issue #134: Policy versioning query functions ──────────────────────
 
+    /// Get a specific versioned refund policy for a merchant.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant address to query.
+    /// * `version` - The version number to retrieve.
+    ///
+    /// # Returns
+    /// The `RefundPolicyVersion` if found, `None` otherwise.
     pub fn get_refund_policy_version(
         env: Env,
         merchant: Address,
@@ -3669,6 +4178,17 @@ impl RefundContract {
             .get(&PolicyKey::RefundPolicyVersion(merchant, version))
     }
 
+    /// Get the refund policy version that was in effect for a merchant at a given timestamp.
+    ///
+    /// Walks all versions in reverse order and returns the latest one created at or
+    /// before the specified timestamp.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant address to query.
+    /// * `timestamp` - The Unix timestamp to look up the policy for.
+    ///
+    /// # Returns
+    /// The `RefundPolicyVersion` in effect at the given time, or `None` if no version existed.
     pub fn get_refund_policy_at_time(
         env: Env,
         merchant: Address,
@@ -3701,6 +4221,13 @@ impl RefundContract {
         result
     }
 
+    /// Get the full version history of refund policies for a merchant.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant address to query.
+    ///
+    /// # Returns
+    /// A vector of all `RefundPolicyVersion` entries in chronological order.
     pub fn get_refund_policy_history(env: Env, merchant: Address) -> Vec<RefundPolicyVersion> {
         let count: u32 = env
             .storage()
@@ -3723,6 +4250,13 @@ impl RefundContract {
         history
     }
 
+    /// Get the current active refund policy for a merchant.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant address to query.
+    ///
+    /// # Returns
+    /// The current `RefundPolicy` if one exists, `None` otherwise.
     pub fn get_refund_policy(env: &Env, merchant: Address) -> Option<RefundPolicy> {
         env.storage()
             .instance()
@@ -3821,33 +4355,83 @@ impl RefundContract {
         env.storage().instance().set(&composite_key, &inherit);
     }
 
+    /// Check whether a merchant's refunds require admin approval before processing.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant address to query.
+    ///
+    /// # Returns
+    /// `true` if admin approval is required (the default), `false` otherwise.
     pub fn get_requires_admin_approval(env: Env, merchant: Address) -> bool {
         Self::get_requires_admin_approval_inner(&env, &merchant)
     }
 
+    /// Set whether a merchant's refunds require admin approval before processing.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant address to configure (must authenticate).
+    /// * `value` - `true` to require admin approval, `false` to allow auto-processing.
     pub fn set_requires_admin_approval(env: Env, merchant: Address, value: bool) {
         merchant.require_auth();
         Self::set_requires_admin_approval_inner(&env, &merchant, value);
     }
 
+    /// Get the auto-approval threshold amount for a merchant.
+    ///
+    /// Refunds at or below this amount are automatically approved when admin approval
+    /// is not required.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant address to query.
+    ///
+    /// # Returns
+    /// The auto-approval threshold amount. Returns 0 if not configured.
     pub fn get_auto_approve_below(env: Env, merchant: Address) -> i128 {
         Self::get_auto_approve_below_inner(&env, &merchant)
     }
 
+    /// Set the auto-approval threshold amount for a merchant.
+    ///
+    /// Refunds at or below this amount will be automatically approved when admin
+    /// approval is not required.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant address to configure (must authenticate).
+    /// * `value` - The threshold amount below which refunds are auto-approved.
     pub fn set_auto_approve_below(env: Env, merchant: Address, value: i128) {
         merchant.require_auth();
         Self::set_auto_approve_below_inner(&env, &merchant, value);
     }
 
+    /// Check whether a merchant inherits its refund policy from its parent merchant.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant address to query.
+    ///
+    /// # Returns
+    /// `true` if inheritance is enabled (the default), `false` otherwise.
     pub fn get_inherit_from_parent(env: Env, merchant: Address) -> bool {
         Self::get_inherit_from_parent_inner(&env, &merchant)
     }
 
+    /// Set whether a merchant inherits its refund policy from its parent merchant.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant address to configure (must authenticate).
+    /// * `inherit` - `true` to enable inheritance, `false` to disable it.
     pub fn set_inherit_from_parent(env: Env, merchant: Address, inherit: bool) {
         merchant.require_auth();
         Self::set_inherit_from_parent_inner(&env, &merchant, inherit);
     }
 
+    /// Deactivate a merchant's refund policy so it is no longer enforced.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant whose policy should be deactivated (must authenticate).
+    ///
+    /// # Errors
+    /// Returns `PolicyNotFound` if no policy exists for the merchant.
+    /// Returns `PolicyInactive` if the policy is already inactive.
     pub fn deactivate_refund_policy(env: Env, merchant: Address) -> Result<(), Error> {
         // Require merchant authentication
         merchant.require_auth();
@@ -3873,6 +4457,19 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Override a refund decision as an admin and create an immutable audit log entry.
+    ///
+    /// Records the override with a SHA-256 transaction hash for integrity verification.
+    /// Emits both `AdminRefundOverride` and legacy `PolicyOverrideApplied` events.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin performing the override.
+    /// * `refund_id` - The ID of the refund to override.
+    /// * `reason` - A human-readable reason for the override.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
+    /// Returns `RefundNotFound` if the refund does not exist.
     pub fn admin_override_policy(
         env: Env,
         admin: Address,
@@ -4146,6 +4743,15 @@ impl RefundContract {
         Ok(chain)
     }
 
+    /// Get the applicable refund basis points for a merchant and payment, considering
+    /// policy inheritance and tier evaluation.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant address to evaluate.
+    /// * `payment_id` - The payment ID to determine the applicable tier.
+    ///
+    /// # Returns
+    /// The maximum refund amount in basis points (0-10000) applicable to the payment.
     pub fn get_applicable_refund_bps(env: Env, merchant: Address, payment_id: u64) -> u32 {
         let payment = match Self::get_external_payment(&env, payment_id) {
             Ok(p) => p,
@@ -4315,6 +4921,10 @@ impl RefundContract {
 
     const DEFAULT_BATCH_LIMIT: u32 = 20;
 
+    /// Get the maximum number of refunds that can be processed in a single batch operation.
+    ///
+    /// # Returns
+    /// The batch refund limit. Defaults to 20 if not configured.
     pub fn get_batch_refund_limit(env: Env) -> u32 {
         env.storage()
             .instance()
@@ -4322,6 +4932,14 @@ impl RefundContract {
             .unwrap_or(Self::DEFAULT_BATCH_LIMIT)
     }
 
+    /// Set the maximum number of refunds allowed per batch operation.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin setting the limit.
+    /// * `limit` - The maximum batch size.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
     pub fn set_batch_refund_limit(env: Env, admin: Address, limit: u32) -> Result<(), Error> {
         admin.require_auth();
         let stored_admin: Address = env
@@ -4338,6 +4956,18 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Approve multiple refunds in a single batch operation.
+    ///
+    /// Per-item failures are isolated; valid items are processed and invalid items
+    /// return an error entry in the results vector without blocking other items.
+    /// The entire batch is rejected if the count exceeds the configured batch limit.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin approving the refunds.
+    /// * `refund_ids` - A vector of refund IDs to approve.
+    ///
+    /// # Returns
+    /// A vector of `BatchRefundResult` entries indicating success or failure for each refund.
     pub fn approve_refund_batch(
         env: Env,
         admin: Address,
@@ -4390,6 +5020,18 @@ impl RefundContract {
         results
     }
 
+    /// Process (finalize) multiple approved refunds in a single batch operation.
+    ///
+    /// Per-item failures are isolated; valid items are processed and invalid items
+    /// return an error entry in the results vector without blocking other items.
+    /// The entire batch is rejected if the count exceeds the configured batch limit.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin processing the refunds.
+    /// * `refund_ids` - A vector of refund IDs to process.
+    ///
+    /// # Returns
+    /// A vector of `BatchRefundResult` entries indicating success or failure for each refund.
     pub fn process_refund_batch(
         env: Env,
         admin: Address,
@@ -4444,6 +5086,14 @@ impl RefundContract {
 
     // ── Issue #143: Cross-contract payment verification ───────────────────────
 
+    /// Set the address of the payment contract used for cross-contract ownership verification.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin setting the address.
+    /// * `payment_contract` - The address of the payment contract.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
     pub fn set_payment_contract_address(
         env: Env,
         admin: Address,
@@ -4464,12 +5114,25 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Get the address of the payment contract used for cross-contract verification.
+    ///
+    /// # Returns
+    /// The payment contract address if configured, `None` otherwise.
     pub fn get_payment_contract_address(env: Env) -> Option<Address> {
         env.storage()
             .instance()
             .get(&DataKey::PaymentContractAddress)
     }
 
+    /// Verify that a customer owns a given payment via a cross-contract call.
+    ///
+    /// # Arguments
+    /// * `payment_id` - The payment ID to verify.
+    /// * `customer` - The customer address to verify ownership for.
+    ///
+    /// # Returns
+    /// `true` if the payment exists, belongs to the customer, and is completed.
+    /// Returns `false` if no payment contract is set or verification fails.
     pub fn verify_payment_ownership(env: Env, payment_id: u64, customer: Address) -> bool {
         let payment_contract: Address = match env
             .storage()
@@ -4869,6 +5532,11 @@ impl RefundContract {
 
     // ── ANALYTICS FUNCTIONS ────────────────────────────────────────────────
 
+    /// Get overall refund analytics for the contract.
+    ///
+    /// # Returns
+    /// A `RefundAnalytics` struct containing total requests, approvals, rejections,
+    /// processed count, total volume, and approval rate in basis points.
     pub fn get_refund_analytics(env: Env) -> RefundAnalytics {
         env.storage()
             .instance()
@@ -4885,6 +5553,16 @@ impl RefundContract {
 
     // ── PAUSE FUNCTIONS ────────────────────────────────────────────────────
 
+    /// Pause the entire contract, blocking all state-changing refund operations.
+    ///
+    /// Records the pause event in the history log with a timestamp and reason.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin pausing the contract.
+    /// * `reason` - A human-readable reason for the pause.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
     pub fn pause_contract(env: Env, admin: Address, reason: String) -> Result<(), Error> {
         admin.require_auth();
         let stored_admin = env
@@ -4946,6 +5624,13 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Unpause the contract and resume all refund operations.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin unpausing the contract.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
     pub fn unpause_contract(env: Env, admin: Address) -> Result<(), Error> {
         admin.require_auth();
         let stored_admin = env
@@ -4994,6 +5679,15 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Pause a specific contract function while keeping others operational.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin pausing the function.
+    /// * `function_name` - The name of the function to pause.
+    /// * `reason` - A human-readable reason for the pause.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
     pub fn pause_function(
         env: Env,
         admin: Address,
@@ -5061,6 +5755,14 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Unpause a previously paused contract function.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin unpausing the function.
+    /// * `function_name` - The name of the function to unpause.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
     pub fn unpause_function(env: Env, admin: Address, function_name: String) -> Result<(), Error> {
         admin.require_auth();
         let stored_admin = env
@@ -5115,6 +5817,11 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Get the current global pause state of the contract.
+    ///
+    /// # Returns
+    /// A `PauseState` struct indicating whether the contract is globally paused,
+    /// which functions are individually paused, and who initiated the pause.
     pub fn get_pause_state(env: Env) -> PauseState {
         env.storage()
             .instance()
@@ -5128,6 +5835,13 @@ impl RefundContract {
             })
     }
 
+    /// Check whether a specific function is currently paused.
+    ///
+    /// # Arguments
+    /// * `function_name` - The name of the function to check.
+    ///
+    /// # Returns
+    /// `true` if the function is paused (either individually or due to a global pause).
     pub fn is_function_paused(env: Env, function_name: String) -> bool {
         if let Some(state) = env
             .storage()
@@ -5178,6 +5892,14 @@ impl RefundContract {
 
     // ── CIRCUIT BREAKER ────────────────────────────────────────────────────
 
+    /// Set the circuit breaker configuration that monitors refund volume ratios.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin setting the configuration.
+    /// * `config` - The `CircuitBreakerConfig` with thresholds and cooldown settings.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
     pub fn set_circuit_breaker_config(
         env: Env,
         admin: Address,
@@ -5198,6 +5920,11 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Get the current state of the circuit breaker.
+    ///
+    /// # Returns
+    /// A `CircuitBreakerState` indicating whether the breaker is tripped, the trip count,
+    /// the last observed refund rate, and the auto-reset timestamp.
     pub fn get_circuit_breaker_state(env: Env) -> CircuitBreakerState {
         let mut state = env
             .storage()
@@ -5226,6 +5953,13 @@ impl RefundContract {
         state
     }
 
+    /// Manually reset the circuit breaker and clear the tripped state.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin resetting the circuit breaker.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
     pub fn reset_circuit_breaker(env: Env, admin: Address) -> Result<(), Error> {
         admin.require_auth();
         let stored_admin: Address = env
@@ -5258,6 +5992,10 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Check whether the circuit breaker is currently active (tripped and not yet reset).
+    ///
+    /// # Returns
+    /// `true` if the circuit breaker is tripped and the cooldown has not elapsed.
     pub fn check_circuit_breaker(env: Env) -> bool {
         let config: CircuitBreakerConfig = match env
             .storage()
@@ -5469,6 +6207,16 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Check for fraud signals on an address based on its refund rate relative to payment count.
+    ///
+    /// If the refund rate exceeds the configured threshold and the address has
+    /// sufficient transaction history, a `FraudSignal` is created or updated.
+    ///
+    /// # Arguments
+    /// * `address` - The address to check for fraud signals.
+    ///
+    /// # Returns
+    /// The `FraudSignal` if one exists and has not been reviewed, `None` otherwise.
     // Fraud detection functions (#137)
     pub fn check_fraud_signals(env: Env, address: Address) -> Option<FraudSignal> {
         // Get fraud config
@@ -5562,6 +6310,11 @@ impl RefundContract {
         }
     }
 
+    /// Get all addresses that have been flagged for potential fraud.
+    ///
+    /// # Returns
+    /// A vector of `FraudSignal` entries for all flagged addresses.
+    /// Currently returns a placeholder empty vector pending full index implementation.
     pub fn get_flagged_addresses(env: Env) -> Vec<FraudSignal> {
         let mut flagged = Vec::new(&env);
 
@@ -5571,6 +6324,16 @@ impl RefundContract {
         flagged
     }
 
+    /// Mark a fraud signal as reviewed by an admin, allowing the address to continue
+    /// requesting refunds.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin marking the signal as reviewed.
+    /// * `address` - The flagged address to review.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
+    /// Returns `FraudSignalNotFound` if no fraud signal exists for the address.
     pub fn mark_fraud_reviewed(env: Env, admin: Address, address: Address) -> Result<(), Error> {
         admin.require_auth();
 
@@ -5605,6 +6368,14 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Set the fraud detection configuration thresholds.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin setting the configuration.
+    /// * `config` - The `FraudConfig` with detection parameters.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
     pub fn set_fraud_config(env: Env, admin: Address, config: FraudConfig) -> Result<(), Error> {
         admin.require_auth();
 
@@ -6262,6 +7033,22 @@ impl RefundContract {
         results
     }
 
+    /// Batch reject multiple refunds in a single operation.
+    ///
+    /// Per-item failures are isolated; successful rejections are recorded in the
+    /// `succeeded` list and failures in the `failed` list.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin performing the batch rejection.
+    /// * `refund_ids` - A vector of refund IDs to reject.
+    /// * `note_hash` - A SHA-256 hash of rejection notes (currently unused).
+    ///
+    /// # Returns
+    /// A `BatchDecisionResult` with lists of succeeded and failed refund IDs.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
+    /// Returns `BatchRefundTooLarge` if the batch exceeds the configured limit.
     pub fn batch_reject_refunds(
         env: Env,
         admin: Address,
@@ -6315,6 +7102,16 @@ impl RefundContract {
 
     // ── Issue #197: Category-based dynamic refund windows ─────────────────────
 
+    /// Set a category-specific refund window for a merchant.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin setting the window.
+    /// * `merchant` - The merchant to configure the window for.
+    /// * `category` - The payment category to apply the window to.
+    /// * `window_seconds` - The refund window duration in seconds for this category.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
     pub fn set_category_window(
         env: Env,
         admin: Address,
@@ -6343,6 +7140,14 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Get the category-specific refund window for a merchant.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant to query.
+    /// * `category` - The payment category to look up.
+    ///
+    /// # Returns
+    /// The refund window in seconds for the category, or `None` if not configured.
     pub fn get_category_window(
         env: Env,
         merchant: Address,
@@ -6357,6 +7162,15 @@ impl RefundContract {
             .map(|w| w.window_seconds)
     }
 
+    /// Tag a payment with a category to determine its applicable refund window.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant who owns the payment (must authenticate).
+    /// * `payment_id` - The payment ID to tag.
+    /// * `category` - The category to assign to the payment.
+    ///
+    /// # Errors
+    /// Returns `AlreadyProcessed` if the payment has already been tagged.
     pub fn tag_payment_category(
         env: Env,
         merchant: Address,
@@ -6378,6 +7192,17 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Get the effective refund window for a specific payment, considering category tags.
+    ///
+    /// If the payment has a category tag and a category-specific window is configured,
+    /// that window is returned. Otherwise, falls back to the merchant's default policy window.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant to query.
+    /// * `payment_id` - The payment ID to evaluate.
+    ///
+    /// # Returns
+    /// The effective refund window in seconds.
     pub fn get_effective_window(env: Env, merchant: Address, payment_id: u64) -> u64 {
         let default_window: u64 = Self::get_refund_policy(&env, merchant.clone())
             .map(|p| {
@@ -6412,6 +7237,15 @@ impl RefundContract {
 
     // ── Issue #198: Round-robin arbitrator auto-assignment ─────────────────────
 
+    /// Configure the round-robin auto-assignment of arbitrators to cases.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin configuring the assignment.
+    /// * `panel_size` - The number of arbitrators to assign per case.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
+    /// Returns `ArbitratorNotFound` if no arbitrators are registered or panel size exceeds the count.
     pub fn configure_auto_assignment(
         env: Env,
         admin: Address,
@@ -6451,6 +7285,19 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Automatically assign a panel of arbitrators to a case using round-robin rotation.
+    ///
+    /// Advances the rotation index after assignment to ensure even distribution of cases.
+    ///
+    /// # Arguments
+    /// * `case_id` - The ID of the arbitration case (currently reserved for future use).
+    ///
+    /// # Returns
+    /// A vector of assigned arbitrator addresses.
+    ///
+    /// # Errors
+    /// Returns `PolicyNotFound` if auto-assignment has not been configured.
+    /// Returns `ArbitratorNotFound` if no arbitrators are registered.
     pub fn auto_assign_arbitrators(env: Env, case_id: u64) -> Result<Vec<Address>, Error> {
         let mut config: ArbitratorAssignmentConfig = env
             .storage()
@@ -6488,6 +7335,15 @@ impl RefundContract {
         Ok(panel)
     }
 
+    /// Preview the next arbitrators that would be assigned using round-robin rotation.
+    ///
+    /// Does not advance the rotation index.
+    ///
+    /// # Arguments
+    /// * `count` - The number of arbitrators to preview.
+    ///
+    /// # Returns
+    /// A vector of the next arbitrator addresses in rotation order.
     pub fn get_next_arbitrators(env: Env, count: u32) -> Vec<Address> {
         let config: ArbitratorAssignmentConfig = match env
             .storage()
@@ -6518,6 +7374,14 @@ impl RefundContract {
         result
     }
 
+    /// Reset the round-robin rotation index back to the beginning.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin resetting the index.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
+    /// Returns `PolicyNotFound` if auto-assignment has not been configured.
     pub fn reset_rotation_index(env: Env, admin: Address) -> Result<(), Error> {
         admin.require_auth();
         let stored_admin: Address = env
@@ -6544,6 +7408,17 @@ impl RefundContract {
 
     // ── Issue #199: Refund request TTL with automatic expiry ──────────────────
 
+    /// Configure the default time-to-live for refund requests.
+    ///
+    /// Refunds that are not processed before their TTL expires can be automatically
+    /// rejected via `expire_stale_refund`.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin setting the TTL.
+    /// * `ttl_seconds` - The default TTL in seconds for new refund requests.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
     pub fn set_refund_ttl_config(env: Env, admin: Address, ttl_seconds: u64) -> Result<(), Error> {
         admin.require_auth();
         let stored_admin: Address = env
@@ -6565,6 +7440,17 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Expire a stale refund request that has exceeded its TTL without being processed.
+    ///
+    /// Moves the refund from `Requested` to `Rejected` status with a "TTL expired" reason.
+    ///
+    /// # Arguments
+    /// * `refund_id` - The ID of the refund to expire.
+    ///
+    /// # Errors
+    /// Returns `RefundNotFound` if the refund does not exist.
+    /// Returns `InvalidStatus` if the refund is not in `Requested` status.
+    /// Returns `RefundWindowExpired` if the refund's TTL has not yet elapsed.
     pub fn expire_stale_refund(env: Env, refund_id: u64) -> Result<(), Error> {
         let mut refund: Refund = env
             .storage()
@@ -6601,6 +7487,13 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Get refund IDs that have expired (past their TTL) and are still in `Requested` status.
+    ///
+    /// # Arguments
+    /// * `limit` - Maximum number of expired refund IDs to return.
+    ///
+    /// # Returns
+    /// A vector of refund IDs that are eligible for expiration.
     pub fn get_expired_refunds(env: Env, limit: u32) -> Vec<u64> {
         let now = env.ledger().timestamp();
         let total: u64 = env
@@ -6636,6 +7529,19 @@ impl RefundContract {
 
     // ── Issue #190: Dispute evidence attachment ────────────────────────────
 
+    /// Submit evidence for a refund dispute as the customer or merchant.
+    ///
+    /// Each party (customer or merchant) can submit one evidence entry per refund.
+    ///
+    /// # Arguments
+    /// * `submitter` - The address submitting the evidence (must be the customer or merchant).
+    /// * `refund_id` - The ID of the refund to submit evidence for.
+    /// * `evidence_hash` - SHA-256 hash of the evidence document.
+    ///
+    /// # Errors
+    /// Returns `RefundNotFound` if the refund does not exist.
+    /// Returns `Unauthorized` if the submitter is not the customer or merchant.
+    /// Returns `EvidenceAlreadySubmitted` if this party has already submitted evidence.
     pub fn submit_refund_evidence(
         env: Env,
         submitter: Address,
@@ -6689,6 +7595,14 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Get the evidence submitted by a specific party for a refund dispute.
+    ///
+    /// # Arguments
+    /// * `refund_id` - The ID of the refund.
+    /// * `submitter` - The address of the party who submitted the evidence.
+    ///
+    /// # Returns
+    /// The `RefundEvidence` if found, `None` otherwise.
     pub fn get_refund_evidence(
         env: Env,
         refund_id: u64,
@@ -6699,6 +7613,13 @@ impl RefundContract {
             .get(&EvidenceKey::Evidence(refund_id, submitter))
     }
 
+    /// Get all evidence entries submitted for a refund dispute.
+    ///
+    /// # Arguments
+    /// * `refund_id` - The ID of the refund.
+    ///
+    /// # Returns
+    /// A vector of all `RefundEvidence` entries for the refund.
     pub fn get_all_refund_evidence(env: Env, refund_id: u64) -> Vec<RefundEvidence> {
         let count: u64 = env
             .storage()
@@ -6728,6 +7649,14 @@ impl RefundContract {
 
     // ── Issue #191: Multi-token refund support ─────────────────────────────
 
+    /// Register a token as a supported refund payment method.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin registering the token.
+    /// * `token` - The address of the token contract to register.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
     pub fn register_refund_token(env: Env, admin: Address, token: Address) -> Result<(), Error> {
         admin.require_auth();
         let stored_admin: Address = env
@@ -6772,6 +7701,17 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Deregister a token so it can no longer be used for refunds.
+    ///
+    /// Sets the token's active status to `false` rather than removing it.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin deregistering the token.
+    /// * `token` - The address of the token contract to deregister.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
+    /// Returns `RefundNotFound` if the token is not registered.
     pub fn deregister_refund_token(env: Env, admin: Address, token: Address) -> Result<(), Error> {
         admin.require_auth();
         let stored_admin: Address = env
@@ -6797,6 +7737,10 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Get all registered refund tokens (both active and inactive).
+    ///
+    /// # Returns
+    /// A vector of `SupportedRefundToken` entries for all registered tokens.
     pub fn get_supported_refund_tokens(env: Env) -> Vec<SupportedRefundToken> {
         let count: u64 = env
             .storage()
@@ -6826,6 +7770,22 @@ impl RefundContract {
 
     // ── Issue #192: Refund credit vouchers ────────────────────────────────
 
+    /// Issue a refund credit voucher for an approved refund.
+    ///
+    /// Creates a voucher with the refund amount that the customer can redeem
+    /// against a future payment.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin issuing the voucher.
+    /// * `refund_id` - The ID of the refund to create a voucher for.
+    /// * `expiry_seconds` - The number of seconds until the voucher expires.
+    ///
+    /// # Returns
+    /// The ID of the newly created voucher.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
+    /// Returns `RefundNotFound` if the refund does not exist.
     pub fn issue_refund_voucher(
         env: Env,
         admin: Address,
@@ -6892,6 +7852,18 @@ impl RefundContract {
         Ok(voucher_id)
     }
 
+    /// Redeem a refund credit voucher for a customer.
+    ///
+    /// # Arguments
+    /// * `customer` - The customer redeeming the voucher (must authenticate).
+    /// * `voucher_id` - The ID of the voucher to redeem.
+    /// * `_payment_id` - The payment ID to apply the voucher to (reserved for future use).
+    ///
+    /// # Errors
+    /// Returns `VoucherNotFound` if the voucher does not exist.
+    /// Returns `Unauthorized` if the caller is not the voucher's customer.
+    /// Returns `VoucherAlreadyRedeemed` if the voucher has already been used.
+    /// Returns `VoucherExpired` if the voucher has expired.
     pub fn redeem_refund_voucher(
         env: Env,
         customer: Address,
@@ -6924,12 +7896,26 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Get a refund voucher by its ID.
+    ///
+    /// # Arguments
+    /// * `voucher_id` - The ID of the voucher to retrieve.
+    ///
+    /// # Returns
+    /// The `RefundVoucher` if found, `None` otherwise.
     pub fn get_voucher(env: Env, voucher_id: u64) -> Option<RefundVoucher> {
         env.storage()
             .instance()
             .get(&VoucherKey::Voucher(voucher_id))
     }
 
+    /// Get all refund vouchers issued to a customer.
+    ///
+    /// # Arguments
+    /// * `customer` - The customer address to query.
+    ///
+    /// # Returns
+    /// A vector of `RefundVoucher` entries for the customer.
     pub fn get_customer_vouchers(env: Env, customer: Address) -> Vec<RefundVoucher> {
         let count: u64 = env
             .storage()
@@ -6959,6 +7945,16 @@ impl RefundContract {
 
     // ── Issue #194: Tiered arbitration escalation ─────────────────────────
 
+    /// Add an arbitrator to the senior arbitrator list for tiered escalation.
+    ///
+    /// Senior arbitrators handle cases that have been escalated from the junior panel.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin adding the senior arbitrator.
+    /// * `arbitrator` - The address of the arbitrator to add.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
     pub fn add_senior_arbitrator(
         env: Env,
         admin: Address,
@@ -6988,6 +7984,14 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Set the configuration for tiered arbitration escalation.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin setting the configuration.
+    /// * `config` - The `ArbitrationTierConfig` with escalation timeout settings.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
     pub fn set_arbitration_tier_config(
         env: Env,
         admin: Address,
@@ -7008,6 +8012,20 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Escalate an arbitration case from the junior panel to the senior arbitrator panel.
+    ///
+    /// The case must be in `Open` status and must have exceeded the escalation timeout.
+    /// Resets all votes and reassigns the case to senior arbitrators.
+    ///
+    /// # Arguments
+    /// * `case_id` - The ID of the arbitration case to escalate.
+    ///
+    /// # Errors
+    /// Returns `CaseAlreadyEscalated` if the case has already been escalated.
+    /// Returns `RefundNotFound` if the case does not exist.
+    /// Returns `InvalidStatus` if the case is not open.
+    /// Returns `CaseNotTimedOut` if the escalation timeout has not elapsed.
+    /// Returns `ArbitratorNotFound` if no senior arbitrators are registered.
     pub fn escalate_arbitration_case(env: Env, case_id: u64) -> Result<(), Error> {
         if env
             .storage()
@@ -7064,6 +8082,13 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Get the arbitration tier (Junior or Senior) for a given case.
+    ///
+    /// # Arguments
+    /// * `case_id` - The ID of the arbitration case.
+    ///
+    /// # Returns
+    /// `ArbitratorTier::Senior` if the case has been escalated, `ArbitratorTier::Junior` otherwise.
     pub fn get_arbitration_tier(env: Env, case_id: u64) -> ArbitratorTier {
         if env
             .storage()
@@ -7078,6 +8103,15 @@ impl RefundContract {
 
     // ── Payment refund cap management ──────────────────────────────────────
 
+    /// Set a refund cap on a specific payment to limit the number and amount of refunds.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin setting the cap.
+    /// * `cap` - The `PaymentRefundCap` with max count and max total amount limits.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
+    /// Returns `InvalidPaymentId` if the payment ID is zero.
     pub fn set_payment_refund_cap(
         env: Env,
         admin: Address,
@@ -7103,12 +8137,27 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Get the refund cap configuration for a specific payment.
+    ///
+    /// # Arguments
+    /// * `payment_id` - The payment ID to query.
+    ///
+    /// # Returns
+    /// The `PaymentRefundCap` if configured, `None` otherwise.
     pub fn get_payment_refund_cap(env: Env, payment_id: u64) -> Option<PaymentRefundCap> {
         env.storage()
             .instance()
             .get(&DataKey::PaymentRefundCap(payment_id))
     }
 
+    /// Get the current refund usage for a specific payment.
+    ///
+    /// # Arguments
+    /// * `payment_id` - The payment ID to query.
+    ///
+    /// # Returns
+    /// A tuple of `(refund_count, total_refunded_amount)` representing how many
+    /// refunds have been made and the cumulative amount refunded.
     pub fn get_payment_refund_usage(env: Env, payment_id: u64) -> (u32, i128) {
         let usage: Option<(u32, i128)> = env
             .storage()
@@ -7178,6 +8227,15 @@ impl RefundContract {
 
     // Issue #370: Customer tier management
 
+    /// Assign a tier level to a customer for tier-based refund cap policies.
+    ///
+    /// # Arguments
+    /// * `admin` - The contract admin setting the tier.
+    /// * `customer` - The customer address to assign the tier to.
+    /// * `tier_id` - The tier level to assign.
+    ///
+    /// # Errors
+    /// Returns `Unauthorized` if the caller is not the contract admin.
     pub fn set_customer_tier(
         env: Env,
         admin: Address,
@@ -7199,12 +8257,28 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Get the tier level assigned to a customer.
+    ///
+    /// # Arguments
+    /// * `customer` - The customer address to query.
+    ///
+    /// # Returns
+    /// The tier ID if assigned, `None` otherwise.
     pub fn get_customer_tier(env: Env, customer: Address) -> Option<u32> {
         env.storage()
             .instance()
             .get(&DataKey::CustomerTier(customer))
     }
 
+    /// Set the refund cap policy for a specific customer tier under a merchant.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant setting the policy (must authenticate).
+    /// * `tier_id` - The tier level to configure.
+    /// * `max_refund_bps` - The maximum refund percentage in basis points (0-10000).
+    ///
+    /// # Errors
+    /// Returns `InvalidAmount` if `max_refund_bps` exceeds 10000.
     pub fn set_customer_tier_policy(
         env: Env,
         merchant: Address,
@@ -7222,12 +8296,28 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Get the refund cap policy for a specific customer tier under a merchant.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant to query.
+    /// * `tier_id` - The tier level to look up.
+    ///
+    /// # Returns
+    /// The `RefundCap` for the tier if configured, `None` otherwise.
     pub fn get_customer_tier_policy(env: Env, merchant: Address, tier_id: u32) -> Option<RefundCap> {
         env.storage()
             .instance()
             .get(&DataKey::CustomerTierPolicy(merchant, tier_id))
     }
 
+    /// Enable or disable strict tier policy enforcement for a merchant.
+    ///
+    /// When strict mode is enabled, customers without an assigned tier are
+    /// denied refunds instead of falling back to default behavior.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant to configure (must authenticate).
+    /// * `strict` - `true` to enable strict mode, `false` to disable it.
     pub fn set_strict_tier_policy(
         env: Env,
         merchant: Address,
@@ -7240,6 +8330,13 @@ impl RefundContract {
         Ok(())
     }
 
+    /// Check whether strict tier policy enforcement is enabled for a merchant.
+    ///
+    /// # Arguments
+    /// * `merchant` - The merchant to query.
+    ///
+    /// # Returns
+    /// `true` if strict mode is enabled, `false` otherwise (the default).
     pub fn get_strict_tier_policy(env: Env, merchant: Address) -> bool {
         env.storage()
             .instance()
