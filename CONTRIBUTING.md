@@ -4,7 +4,7 @@ Thank you for your interest in contributing to FacilPay! We welcome contribution
 
 ## 📜 Code of Conduct
 
-By participating in this project, you agree to maintain a respectful and inclusive environment for all contributors.
+This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code. Please report unacceptable behavior to the project maintainers.
 
 ## 🚀 Getting Started
 
