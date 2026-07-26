@@ -207,6 +207,16 @@ pub enum Error {
 }
 
 impl Error {
+    /// Converts the error enum into its numeric contract error code.
+    ///
+    /// # Arguments
+    /// * `&self` - Parameter value.
+    ///
+    /// # Returns
+    /// The requested u32 value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn to_u32(&self) -> u32 {
         match self {
             Error::Basic(e) => *e as u32,
@@ -1565,6 +1575,14 @@ pub struct EscrowContract;
 
 #[contractimpl]
 impl EscrowContract {
+    /// Initializes the contract state with the provided admin.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    ///
+    /// # Returns
+    /// Nothing.
     pub fn initialize(env: Env, admin: Address) {
         if env
             .storage()
@@ -1589,6 +1607,16 @@ impl EscrowContract {
         AdminAdded { admin }.publish(&env);
     }
 
+    /// Returns schema version.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    ///
+    /// # Returns
+    /// The requested u32 value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_schema_version(env: Env) -> u32 {
         env.storage()
             .instance()
@@ -1596,6 +1624,18 @@ impl EscrowContract {
             .unwrap_or(INITIAL_SCHEMA_VERSION)
     }
 
+    /// Sets escrow fee config.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `config` - Configuration data for the requested feature.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn set_escrow_fee_config(
         env: Env,
         admin: Address,
@@ -1616,6 +1656,16 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns escrow fee config.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    ///
+    /// # Returns
+    /// The requested EscrowFeeConfig value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_escrow_fee_config(env: Env) -> EscrowFeeConfig {
         env.storage()
             .instance()
@@ -1627,6 +1677,17 @@ impl EscrowContract {
             })
     }
 
+    /// Returns accumulated escrow fees.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `token` - Address of the token contract.
+    ///
+    /// # Returns
+    /// The requested i128 value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_accumulated_escrow_fees(env: Env, token: Address) -> i128 {
         env.storage()
             .instance()
@@ -1636,6 +1697,19 @@ impl EscrowContract {
             .unwrap_or(0)
     }
 
+    /// Executes withdraw escrow fees.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `token` - Address of the token contract.
+    /// * `to` - Address of the signer or participant.
+    ///
+    /// # Returns
+    /// Results in `Ok(i128)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn withdraw_escrow_fees(
         env: Env,
         admin: Address,
@@ -1674,6 +1748,16 @@ impl EscrowContract {
         Ok(amount)
     }
 
+    /// Returns multisig config.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    ///
+    /// # Returns
+    /// The requested MultiSigConfig value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_multisig_config(env: Env) -> MultiSigConfig {
         env.storage()
             .instance()
@@ -1681,6 +1765,20 @@ impl EscrowContract {
             .expect("MultiSig not initialized")
     }
 
+    /// Executes propose action.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `proposer` - Address of the signer or participant.
+    /// * `action_type` - Type of administrative action being proposed.
+    /// * `target` - Target address or contract for the action.
+    /// * `data` - Encoded action data.
+    ///
+    /// # Returns
+    /// Results in `Ok(String)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn propose_action(
         env: Env,
         proposer: Address,
@@ -1745,6 +1843,18 @@ impl EscrowContract {
         Ok(proposal_id)
     }
 
+    /// Approves action.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `approver` - Address of the signer or participant.
+    /// * `proposal_id` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn approve_action(env: Env, approver: Address, proposal_id: String) -> Result<(), Error> {
         approver.require_auth();
 
@@ -1796,6 +1906,17 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Executes a queued or direct action.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `proposal_id` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn execute_action(env: Env, proposal_id: String) -> Result<(), Error> {
         let config: MultiSigConfig = env
             .storage()
@@ -1836,6 +1957,18 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Executes reject action.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `rejecter` - Address of the signer or participant.
+    /// * `proposal_id` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn reject_action(env: Env, rejecter: Address, proposal_id: String) -> Result<(), Error> {
         rejecter.require_auth();
 
@@ -1876,6 +2009,18 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Adds admin.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `caller` - Address of the signer or participant.
+    /// * `new_admin` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn add_admin(env: Env, caller: Address, new_admin: Address) -> Result<(), Error> {
         caller.require_auth();
 
@@ -1907,6 +2052,18 @@ impl EscrowContract {
     // block exists to stop a lone human admin from self-servicing an early
     // release; a registered bridge acting on an already-verified external
     // completion event is a different trust boundary).
+    /// Adds trusted brIDge.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `caller` - Address of the signer or participant.
+    /// * `bridge` - Trusted bridge contract address.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn add_trusted_bridge(env: Env, caller: Address, bridge: Address) -> Result<(), Error> {
         caller.require_auth();
 
@@ -1931,6 +2088,18 @@ impl EscrowContract {
             .has(&DataKey::Config(ConfigKey::TrustedBridge(address.clone())))
     }
 
+    /// Removes admin.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `caller` - Address of the signer or participant.
+    /// * `admin` - Address of the signer or participant.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn remove_admin(env: Env, caller: Address, admin: Address) -> Result<(), Error> {
         caller.require_auth();
 
@@ -1969,6 +2138,18 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Executes update required signatures.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `caller` - Address of the signer or participant.
+    /// * `_required` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn update_required_signatures(
         env: Env,
         caller: Address,
@@ -1980,6 +2161,19 @@ impl EscrowContract {
         Err(Error::Basic(BasicError::Unauthorized))
     }
 
+    /// Executes designate successor.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `successor` - Parameter value.
+    /// * `delay_seconds` - Delay in seconds before the action becomes executable.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn designate_successor(
         env: Env,
         admin: Address,
@@ -2033,6 +2227,17 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Executes activate succession.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `successor` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn activate_succession(env: Env, successor: Address) -> Result<(), Error> {
         successor.require_auth();
 
@@ -2081,6 +2286,17 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Executes revoke succession.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn revoke_succession(env: Env, admin: Address) -> Result<(), Error> {
         admin.require_auth();
 
@@ -2107,12 +2323,33 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns succession plan.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    ///
+    /// # Returns
+    /// Some result when found or None when no value exists.
     pub fn get_succession_plan(env: Env) -> Option<SuccessionPlan> {
         env.storage()
             .instance()
             .get(&DataKey::Config(ConfigKey::AdminSuccessionPlan))
     }
 
+    /// Executes initiate clawback.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    /// * `reason_hash` - Hash representing the reason for the action.
+    /// * `delay_seconds` - Delay in seconds before the action becomes executable.
+    ///
+    /// # Returns
+    /// Results in `Ok(u64)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn initiate_clawback(
         env: Env,
         admin: Address,
@@ -2190,6 +2427,18 @@ impl EscrowContract {
         Ok(counter)
     }
 
+    /// Executes a queued or direct action.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `request_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn execute_clawback(env: Env, admin: Address, request_id: u64) -> Result<(), Error> {
         admin.require_auth();
 
@@ -2240,6 +2489,18 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Cancels a pending request or action.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `request_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn cancel_clawback(env: Env, admin: Address, request_id: u64) -> Result<(), Error> {
         admin.require_auth();
 
@@ -2272,6 +2533,14 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns clawback request.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `request_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Some result when found or None when no value exists.
     pub fn get_clawback_request(env: Env, request_id: u64) -> Option<ClawbackRequest> {
         env.storage()
             .instance()
@@ -2280,6 +2549,24 @@ impl EscrowContract {
             )))
     }
 
+    /// Creates escrow.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `customer` - Address of the signer or participant.
+    /// * `merchant` - Address of the signer or participant.
+    /// * `amount` - Amount of tokens or funds.
+    /// * `token` - Address of the token contract.
+    /// * `release_timestamp` - Parameter value.
+    /// * `min_hold_period` - Parameter value.
+    /// * `expiry_timestamp` - Parameter value.
+    /// * `auto_refund_on_expiry` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(u64)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn create_escrow(
         env: Env,
         customer: Address,
@@ -2306,6 +2593,25 @@ impl EscrowContract {
         )
     }
 
+    /// Creates escrow with multisig.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `customer` - Address of the signer or participant.
+    /// * `merchant` - Address of the signer or participant.
+    /// * `amount` - Amount of tokens or funds.
+    /// * `token` - Address of the token contract.
+    /// * `release_timestamp` - Parameter value.
+    /// * `min_hold_period` - Parameter value.
+    /// * `expiry_timestamp` - Parameter value.
+    /// * `auto_refund_on_expiry` - Parameter value.
+    /// * `multisig` - Configuration for a multi-signature release.
+    ///
+    /// # Returns
+    /// Results in `Ok(u64)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn create_escrow_with_multisig(
         env: Env,
         customer: Address,
@@ -2509,6 +2815,21 @@ impl EscrowContract {
         Ok(escrow_id)
     }
 
+    /// Creates multi party escrow.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `customer` - Address of the signer or participant.
+    /// * `participants` - Parameter value.
+    /// * `total_amount` - Parameter value.
+    /// * `token` - Address of the token contract.
+    /// * `release_timestamp` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(u64)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn create_multi_party_escrow(
         env: Env,
         customer: Address,
@@ -2617,6 +2938,18 @@ impl EscrowContract {
         Ok(escrow_id)
     }
 
+    /// Approves release.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `caller` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn approve_release(env: Env, caller: Address, escrow_id: u64) -> Result<(), Error> {
         caller.require_auth();
 
@@ -2695,6 +3028,17 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Releases multi party escrow.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn release_multi_party_escrow(env: Env, escrow_id: u64) -> Result<(), Error> {
         if !env
             .storage()
@@ -2753,6 +3097,17 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns multi party escrow.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(MultiPartyEscrow)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn get_multi_party_escrow(env: Env, escrow_id: u64) -> Result<MultiPartyEscrow, Error> {
         if !env
             .storage()
@@ -2909,6 +3264,20 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Creates multi token escrow.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `customer` - Address of the signer or participant.
+    /// * `merchant` - Address of the signer or participant.
+    /// * `tokens` - List of token entries.
+    /// * `release_timestamp` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(u64)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn create_multi_token_escrow(
         env: Env,
         customer: Address,
@@ -2983,6 +3352,17 @@ impl EscrowContract {
         Ok(escrow_id)
     }
 
+    /// Releases multi token escrow.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn release_multi_token_escrow(env: Env, escrow_id: u64) -> Result<(), Error> {
         let mut escrow: MultiTokenEscrow = env
             .storage()
@@ -3038,6 +3418,17 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns multi token escrow.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(MultiTokenEscrow)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn get_multi_token_escrow(env: Env, escrow_id: u64) -> Result<MultiTokenEscrow, Error> {
         env.storage()
             .instance()
@@ -3045,6 +3436,17 @@ impl EscrowContract {
             .ok_or(Error::Escrow(EscrowError::NotFound))
     }
 
+    /// Returns escrow.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// The requested Escrow value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_escrow(env: &Env, escrow_id: u64) -> Escrow {
         env.storage()
             .instance()
@@ -3052,6 +3454,18 @@ impl EscrowContract {
             .expect("Escrow not found")
     }
 
+    /// Approves escrow release.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `signer` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn approve_escrow_release(env: Env, signer: Address, escrow_id: u64) -> Result<(), Error> {
         signer.require_auth();
 
@@ -3096,6 +3510,19 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Releases escrow.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    /// * `early_release` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn release_escrow(
         env: Env,
         admin: Address,
@@ -3324,6 +3751,18 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Refunds escrow.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `caller` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn refund_escrow(env: Env, caller: Address, escrow_id: u64) -> Result<(), Error> {
         caller.require_auth();
 
@@ -3376,6 +3815,18 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Files or manages a dispute for an escrow.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `caller` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn dispute_escrow(env: Env, caller: Address, escrow_id: u64) -> Result<(), Error> {
         caller.require_auth();
 
@@ -3493,6 +3944,19 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Submits evidence.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `caller` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    /// * `ipfs_hash` - IPFS hash pointing to submitted evidence.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn submit_evidence(
         env: Env,
         caller: Address,
@@ -3633,6 +4097,17 @@ impl EscrowContract {
         EscrowContract::append_evidence_entry(&env, escrow_id, caller, ipfs_hash)
     }
 
+    /// Returns evIDence commitment.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(EvidenceCommitment)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn get_evidence_commitment(env: Env, escrow_id: u64) -> Result<EvidenceCommitment, Error> {
         if !env
             .storage()
@@ -3732,6 +4207,17 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns evIDence count.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// The requested u64 value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_evidence_count(env: &Env, escrow_id: u64) -> u64 {
         env.storage()
             .instance()
@@ -3739,6 +4225,19 @@ impl EscrowContract {
             .unwrap_or(0)
     }
 
+    /// Returns evIDence.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    /// * `limit` - Maximum number of items to return or process.
+    /// * `offset` - Pagination offset or page index.
+    ///
+    /// # Returns
+    /// The requested Vec<Evidence> value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_evidence(env: Env, escrow_id: u64, limit: u64, offset: u64) -> Vec<Evidence> {
         let total: u64 = EscrowContract::get_evidence_count(&env, escrow_id);
         let mut items = Vec::new(&env);
@@ -3760,6 +4259,19 @@ impl EscrowContract {
         items
     }
 
+    /// Submits evidence batch.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `caller` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    /// * `evidence_items` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(u32)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn submit_evidence_batch(
         env: Env,
         caller: Address,
@@ -3831,6 +4343,18 @@ impl EscrowContract {
         Ok(page_num + 1)
     }
 
+    /// Returns evIDence page.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    /// * `page` - Pagination offset or page index.
+    ///
+    /// # Returns
+    /// The requested Vec<Evidence> value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_evidence_page(env: Env, escrow_id: u64, page: u32) -> Vec<Evidence> {
         env.storage()
             .instance()
@@ -3838,6 +4362,18 @@ impl EscrowContract {
             .unwrap_or(Vec::new(&env))
     }
 
+    /// Escalates a dispute for the specified escrow.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `caller` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn escalate_dispute(env: Env, caller: Address, escrow_id: u64) -> Result<(), Error> {
         caller.require_auth();
         if !env
@@ -3873,6 +4409,17 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Automatically resolves a dispute or action when conditions are met.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn auto_resolve_dispute(env: Env, escrow_id: u64) -> Result<(), Error> {
         if !env
             .storage()
@@ -3919,6 +4466,19 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Sets escalation config.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `timeout_seconds` - Parameter value.
+    /// * `favor` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn set_escalation_config(
         env: Env,
         admin: Address,
@@ -3940,6 +4500,17 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Executes check escalation timeout.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// True or false.
+    ///
+    /// # Panics
+    /// Panics if the contract state is invalid.
     pub fn check_escalation_timeout(env: Env, escrow_id: u64) -> bool {
         let escrow: Option<Escrow> = env
             .storage()
@@ -3957,6 +4528,17 @@ impl EscrowContract {
         }
     }
 
+    /// Triggers the specified timeout or action.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn trigger_timeout_resolution(env: Env, escrow_id: u64) -> Result<(), Error> {
         if !env
             .storage()
@@ -4111,6 +4693,19 @@ impl EscrowContract {
         processed
     }
 
+    /// Resolves a dispute or appeal.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    /// * `release_to_merchant` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn resolve_dispute(
         env: Env,
         admin: Address,
@@ -4294,6 +4889,19 @@ impl EscrowContract {
         }
     }
 
+    /// Files a record or claim for an escrow.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `appellant` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    /// * `reason_hash` - Hash representing the reason for the action.
+    ///
+    /// # Returns
+    /// Results in `Ok(u64)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn file_dispute_appeal(
         env: Env,
         appellant: Address,
@@ -4408,6 +5016,17 @@ impl EscrowContract {
         Ok(appeal_id)
     }
 
+    /// Returns dispute round.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// The requested DisputeRound value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_dispute_round(env: Env, escrow_id: u64) -> DisputeRound {
         env.storage()
             .instance()
@@ -4415,6 +5034,19 @@ impl EscrowContract {
             .unwrap_or(DisputeRound::Initial)
     }
 
+    /// Resolves a dispute or appeal.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `appeal_id` - Identifier for the requested object.
+    /// * `in_favour_of` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn resolve_appeal(
         env: Env,
         admin: Address,
@@ -4568,12 +5200,33 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns appeal.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `appeal_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Some result when found or None when no value exists.
     pub fn get_appeal(env: Env, appeal_id: u64) -> Option<DisputeAppeal> {
         env.storage()
             .instance()
             .get::<DataKey, DisputeAppeal>(&DataKey::Dispute(DisputeKey::Appeal(appeal_id)))
     }
 
+    /// Returns escrows by customer.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `customer` - Address of the signer or participant.
+    /// * `limit` - Maximum number of items to return or process.
+    /// * `offset` - Pagination offset or page index.
+    ///
+    /// # Returns
+    /// The requested Vec<Escrow> value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_escrows_by_customer(
         env: Env,
         customer: Address,
@@ -4612,6 +5265,17 @@ impl EscrowContract {
         escrows
     }
 
+    /// Returns escrow count by customer.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `customer` - Address of the signer or participant.
+    ///
+    /// # Returns
+    /// The requested u64 value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_escrow_count_by_customer(env: Env, customer: Address) -> u64 {
         env.storage()
             .instance()
@@ -4619,6 +5283,19 @@ impl EscrowContract {
             .unwrap_or(0)
     }
 
+    /// Returns escrows by merchant.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `merchant` - Address of the signer or participant.
+    /// * `limit` - Maximum number of items to return or process.
+    /// * `offset` - Pagination offset or page index.
+    ///
+    /// # Returns
+    /// The requested Vec<Escrow> value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_escrows_by_merchant(
         env: Env,
         merchant: Address,
@@ -4657,6 +5334,17 @@ impl EscrowContract {
         escrows
     }
 
+    /// Returns escrow count by merchant.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `merchant` - Address of the signer or participant.
+    ///
+    /// # Returns
+    /// The requested u64 value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_escrow_count_by_merchant(env: Env, merchant: Address) -> u64 {
         env.storage()
             .instance()
@@ -5454,6 +6142,17 @@ impl EscrowContract {
         }
     }
 
+    /// Returns vested amount.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// The requested i128 value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_vested_amount(env: Env, escrow_id: u64) -> i128 {
         let vesting_schedule =
             match env
@@ -5477,6 +6176,20 @@ impl EscrowContract {
         }
     }
 
+    /// Sets vesting acceleration config.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `schedule_id` - Identifier for the requested object.
+    /// * `milestone_bps` - Parameter value.
+    /// * `max_acceleration_bps` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn set_vesting_acceleration_config(
         env: Env,
         admin: Address,
@@ -5524,6 +6237,18 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Marks milestone complete.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `schedule_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn mark_milestone_complete(
         env: Env,
         admin: Address,
@@ -5563,6 +6288,14 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns acceleration config.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `schedule_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Some result when found or None when no value exists.
     pub fn get_acceleration_config(
         env: Env,
         schedule_id: u64,
@@ -5574,6 +6307,17 @@ impl EscrowContract {
             )))
     }
 
+    /// Calculates accelerated amount.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `schedule_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// The requested i128 value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn calculate_accelerated_amount(env: Env, schedule_id: u64) -> i128 {
         let vesting_schedule =
             match env
@@ -6325,6 +7069,20 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Queues an administrative action for later execution.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    /// * `action_type` - Type of administrative action being proposed.
+    /// * `data` - Encoded action data.
+    ///
+    /// # Returns
+    /// Results in `Ok(u64)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn queue_action(
         env: Env,
         admin: Address,
@@ -6379,6 +7137,17 @@ impl EscrowContract {
         Ok(action_id)
     }
 
+    /// Executes a queued or direct action.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `action_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn execute_queued_action(env: Env, action_id: u64) -> Result<(), Error> {
         let mut action: TimeLockAction = env
             .storage()
@@ -6437,6 +7206,18 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Cancels a pending request or action.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `action_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn cancel_queued_action(env: Env, admin: Address, action_id: u64) -> Result<(), Error> {
         admin.require_auth();
 
@@ -6477,6 +7258,17 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns queued action.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `action_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(TimeLockAction)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn get_queued_action(env: Env, action_id: u64) -> Result<TimeLockAction, Error> {
         env.storage()
             .instance()
@@ -6484,6 +7276,18 @@ impl EscrowContract {
             .ok_or(Error::Basic(BasicError::Unauthorized))
     }
 
+    /// Sets timelock config.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `config` - Configuration data for the requested feature.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn set_timelock_config(
         env: Env,
         admin: Address,
@@ -6515,6 +7319,16 @@ impl EscrowContract {
 
     // ── ANALYTICS FUNCTIONS ────────────────────────────────────────────────
 
+    /// Returns escrow analytics.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    ///
+    /// # Returns
+    /// The requested EscrowAnalytics value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_escrow_analytics(env: Env) -> EscrowAnalytics {
         env.storage()
             .instance()
@@ -6522,6 +7336,17 @@ impl EscrowContract {
             .unwrap_or(EscrowAnalytics::default_value())
     }
 
+    /// Returns merchant analytics.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `merchant` - Address of the signer or participant.
+    ///
+    /// # Returns
+    /// The requested EscrowAnalytics value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_merchant_analytics(env: Env, merchant: Address) -> EscrowAnalytics {
         env.storage()
             .instance()
@@ -6531,6 +7356,17 @@ impl EscrowContract {
             .unwrap_or(EscrowAnalytics::default_value())
     }
 
+    /// Returns customer analytics.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `customer` - Address of the signer or participant.
+    ///
+    /// # Returns
+    /// The requested EscrowAnalytics value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_customer_analytics(env: Env, customer: Address) -> EscrowAnalytics {
         env.storage()
             .instance()
@@ -6540,6 +7376,17 @@ impl EscrowContract {
             .unwrap_or(EscrowAnalytics::default_value())
     }
 
+    /// Executes reset analytics.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn reset_analytics(env: Env, admin: Address) -> Result<(), Error> {
         admin.require_auth();
         let config = Self::get_multisig_config(env.clone());
@@ -6561,6 +7408,18 @@ impl EscrowContract {
 
     // ── PAUSE FUNCTIONS ────────────────────────────────────────────────────
 
+    /// Executes pause contract.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `reason` - Reason description.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn pause_contract(env: Env, admin: Address, reason: String) -> Result<(), Error> {
         admin.require_auth();
         let config: MultiSigConfig = env
@@ -6638,6 +7497,17 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Executes unpause contract.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn unpause_contract(env: Env, admin: Address) -> Result<(), Error> {
         admin.require_auth();
         let config: MultiSigConfig = env
@@ -6693,6 +7563,19 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Executes pause function.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `function_name` - Name of the function to pause or unpause.
+    /// * `reason` - Reason description.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn pause_function(
         env: Env,
         admin: Address,
@@ -6778,6 +7661,18 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Executes unpause function.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `function_name` - Name of the function to pause or unpause.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn unpause_function(env: Env, admin: Address, function_name: String) -> Result<(), Error> {
         admin.require_auth();
         let config: MultiSigConfig = env
@@ -6840,6 +7735,18 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns pause history.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `limit` - Maximum number of items to return or process.
+    /// * `offset` - Pagination offset or page index.
+    ///
+    /// # Returns
+    /// The requested Vec<PauseHistory> value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_pause_history(env: Env, limit: u32, offset: u32) -> Vec<PauseHistory> {
         let mut result = Vec::new(&env);
         let total: u64 = env
@@ -6866,6 +7773,17 @@ impl EscrowContract {
         result
     }
 
+    /// Returns function pause history.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `function_name` - Name of the function to pause or unpause.
+    ///
+    /// # Returns
+    /// The requested Vec<PauseHistory> value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_function_pause_history(env: Env, function_name: String) -> Vec<PauseHistory> {
         let mut result = Vec::new(&env);
         let total: u64 = env
@@ -6889,6 +7807,16 @@ impl EscrowContract {
         result
     }
 
+    /// Returns pause state.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    ///
+    /// # Returns
+    /// The requested PauseState value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_pause_state(env: Env) -> PauseState {
         env.storage()
             .instance()
@@ -6902,6 +7830,17 @@ impl EscrowContract {
             })
     }
 
+    /// Returns true if function paused.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `function_name` - Name of the function to pause or unpause.
+    ///
+    /// # Returns
+    /// True or false.
+    ///
+    /// # Panics
+    /// Panics if the contract state is invalid.
     pub fn is_function_paused(env: Env, function_name: String) -> bool {
         if let Some(state) = env
             .storage()
@@ -6922,6 +7861,17 @@ impl EscrowContract {
 
     // ── MIGRATION ─────────────────────────────────────────────────────────────
 
+    /// Executes begin migration.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn begin_migration(env: Env, admin: Address) -> Result<(), Error> {
         admin.require_auth();
         let multisig = Self::get_multisig_config(env.clone());
@@ -6963,6 +7913,18 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Executes migrate escrow.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn migrate_escrow(env: Env, admin: Address, escrow_id: u64) -> Result<(), Error> {
         admin.require_auth();
         let multisig = Self::get_multisig_config(env.clone());
@@ -7013,6 +7975,18 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Executes migrate escrow batch.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `escrow_ids` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(u32)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn migrate_escrow_batch(
         env: Env,
         admin: Address,
@@ -7077,6 +8051,17 @@ impl EscrowContract {
         Ok(migrated)
     }
 
+    /// Executes complete migration.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn complete_migration(env: Env, admin: Address) -> Result<(), Error> {
         admin.require_auth();
         let multisig = Self::get_multisig_config(env.clone());
@@ -7112,6 +8097,16 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns migration status.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    ///
+    /// # Returns
+    /// The requested MigrationStatus value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_migration_status(env: Env) -> MigrationStatus {
         env.storage()
             .instance()
@@ -7144,6 +8139,16 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns timelock config.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    ///
+    /// # Returns
+    /// The requested TimeLockConfig value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_timelock_config(env: Env) -> TimeLockConfig {
         env.storage()
             .instance()
@@ -7154,6 +8159,18 @@ impl EscrowContract {
             })
     }
 
+    /// Sets insurance config.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `config` - Configuration data for the requested feature.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn set_insurance_config(
         env: Env,
         admin: Address,
@@ -7170,6 +8187,18 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Sets watchdog config.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `config` - Configuration data for the requested feature.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn set_watchdog_config(
         env: Env,
         admin: Address,
@@ -7186,6 +8215,16 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns insurance pool.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    ///
+    /// # Returns
+    /// The requested InsurancePool value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_insurance_pool(env: Env) -> InsurancePool {
         env.storage()
             .instance()
@@ -7198,6 +8237,17 @@ impl EscrowContract {
             })
     }
 
+    /// Executes opt into insurance.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn opt_into_insurance(env: Env, escrow_id: u64) -> Result<(), Error> {
         let config: InsuranceConfig = env
             .storage()
@@ -7234,6 +8284,19 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Files a record or claim for an escrow.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    /// * `amount` - Amount of tokens or funds.
+    ///
+    /// # Returns
+    /// Results in `Ok(u64)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn file_insurance_claim(
         env: Env,
         admin: Address,
@@ -7288,6 +8351,18 @@ impl EscrowContract {
         Ok(counter)
     }
 
+    /// Approves claim.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `claim_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn approve_claim(env: Env, admin: Address, claim_id: u64) -> Result<(), Error> {
         admin.require_auth();
         let multisig = Self::get_multisig_config(env.clone());
@@ -7327,6 +8402,16 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns watchdog config.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    ///
+    /// # Returns
+    /// The requested WatchdogConfig value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_watchdog_config(env: Env) -> WatchdogConfig {
         env.storage()
             .instance()
@@ -7338,6 +8423,17 @@ impl EscrowContract {
             })
     }
 
+    /// Returns true if watchdog eligible.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// True or false.
+    ///
+    /// # Panics
+    /// Panics if the contract state is invalid.
     pub fn is_watchdog_eligible(env: Env, escrow_id: u64) -> bool {
         let config = Self::get_watchdog_config(env.clone());
         if !config.enabled {
@@ -7365,6 +8461,17 @@ impl EscrowContract {
         true
     }
 
+    /// Triggers the specified timeout or action.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn trigger_watchdog_release(env: Env, escrow_id: u64) -> Result<(), Error> {
         if !Self::is_watchdog_eligible(env.clone(), escrow_id) {
             return Err(Error::Action(ActionError::NotReady));
@@ -7402,6 +8509,18 @@ impl EscrowContract {
     }
     // ── REPUTATION DECAY FUNCTIONS (#75) ───────────────────────────────────
 
+    /// Executes update decay config.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `config` - Configuration data for the requested feature.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn update_decay_config(
         env: Env,
         admin: Address,
@@ -7418,6 +8537,18 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Sets dispute config.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `config` - Configuration data for the requested feature.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn set_dispute_config(
         env: Env,
         admin: Address,
@@ -7439,6 +8570,16 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns dispute config.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    ///
+    /// # Returns
+    /// The requested DisputeConfig value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_dispute_config(env: Env) -> DisputeConfig {
         env.storage()
             .instance()
@@ -7451,6 +8592,17 @@ impl EscrowContract {
             })
     }
 
+    /// Returns dispute collateral.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(DisputeCollateral)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn get_dispute_collateral(env: Env, escrow_id: u64) -> Result<DisputeCollateral, Error> {
         env.storage()
             .instance()
@@ -7458,6 +8610,17 @@ impl EscrowContract {
             .ok_or(Error::Escrow(EscrowError::InvalidStatus))
     }
 
+    /// Returns effective reputation.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `address` - Parameter value.
+    ///
+    /// # Returns
+    /// The requested i128 value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_effective_reputation(env: Env, address: Address) -> i128 {
         let rep = EscrowContract::get_or_default_reputation(&env, &address);
         let config = EscrowContract::get_or_default_decay_config(&env);
@@ -7465,6 +8628,17 @@ impl EscrowContract {
         EscrowContract::compute_decayed_score(&rep, &config, now)
     }
 
+    /// Executes apply reputation decay.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `address` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(i128)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn apply_reputation_decay(env: Env, address: Address) -> Result<i128, Error> {
         let mut rep = EscrowContract::get_or_default_reputation(&env, &address);
         let config = EscrowContract::get_or_default_decay_config(&env);
@@ -7529,6 +8703,19 @@ impl EscrowContract {
 
     // ── ORACLE AUTO-RESOLUTION (#85) ───────────────────────────────────────
 
+    /// Executes attach oracle condition.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    /// * `condition` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn attach_oracle_condition(
         env: Env,
         admin: Address,
@@ -7558,6 +8745,17 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns oracle condition.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(OracleCondition)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn get_oracle_condition(env: Env, escrow_id: u64) -> Result<OracleCondition, Error> {
         env.storage()
             .instance()
@@ -7565,6 +8763,17 @@ impl EscrowContract {
             .ok_or(Error::Escrow(EscrowError::InvalidStatus))
     }
 
+    /// Automatically resolves a dispute or action when conditions are met.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn auto_resolve_with_oracle(env: Env, escrow_id: u64) -> Result<(), Error> {
         if !env
             .storage()
@@ -7614,6 +8823,21 @@ impl EscrowContract {
 
     // ── CONDITIONAL ESCROW (ON-CHAIN STATE) ───────────────────────────────
 
+    /// Creates conditional escrow.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `customer` - Address of the signer or participant.
+    /// * `merchant` - Address of the signer or participant.
+    /// * `token` - Address of the token contract.
+    /// * `amount` - Amount of tokens or funds.
+    /// * `condition` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(u64)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn create_conditional_escrow(
         env: Env,
         customer: Address,
@@ -7693,6 +8917,17 @@ impl EscrowContract {
         Ok(escrow_id)
     }
 
+    /// Executes evaluate and release.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(bool)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn evaluate_and_release(env: Env, escrow_id: u64) -> Result<bool, Error> {
         let mut conditional: ConditionalEscrow = env
             .storage()
@@ -7795,6 +9030,17 @@ impl EscrowContract {
         Ok(met)
     }
 
+    /// Returns conditional escrow.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(ConditionalEscrow)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn get_conditional_escrow(env: Env, escrow_id: u64) -> Result<ConditionalEscrow, Error> {
         env.storage()
             .instance()
@@ -7804,6 +9050,19 @@ impl EscrowContract {
 
     // ── BENEFICIARY TRANSFER ──────────────────────────────────────────────
 
+    /// Executes transfer escrow beneficiary.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `caller` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    /// * `new_merchant` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn transfer_escrow_beneficiary(
         env: Env,
         caller: Address,
@@ -7881,6 +9140,17 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns transfer history.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// The requested Vec<BeneficiaryTransfer> value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_transfer_history(env: Env, escrow_id: u64) -> Vec<BeneficiaryTransfer> {
         let count: u64 = env
             .storage()
@@ -7981,6 +9251,18 @@ impl EscrowContract {
 
     // ── MULTI-PARTY DISPUTE ────────────────────────────────────────────────
 
+    /// Files or manages a dispute for an escrow.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `caller` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn dispute_multi_party_escrow(
         env: Env,
         caller: Address,
@@ -8041,6 +9323,19 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Executes vote on multi party dispute.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `voter` - Parameter value.
+    /// * `escrow_id` - Identifier for the requested object.
+    /// * `favor_merchant` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn vote_on_multi_party_dispute(
         env: Env,
         voter: Address,
@@ -8108,6 +9403,17 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Resolves a dispute or appeal.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn resolve_multi_party_dispute(env: Env, escrow_id: u64) -> Result<(), Error> {
         let mut escrow: MultiPartyEscrow = env
             .storage()
@@ -8199,6 +9505,17 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns multi party dispute.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(MultiPartyDispute)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn get_multi_party_dispute(env: Env, escrow_id: u64) -> Result<MultiPartyDispute, Error> {
         env.storage()
             .instance()
@@ -8208,6 +9525,18 @@ impl EscrowContract {
 
     // ── BATCH ESCROW CREATION ─────────────────────────────────────────────
 
+    /// Creates escrow batch.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `entries` - Parameter value.
+    ///
+    /// # Returns
+    /// The requested Vec<BatchEscrowResult> value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn create_escrow_batch(
         env: Env,
         admin: Address,
@@ -8407,6 +9736,16 @@ impl EscrowContract {
         Ok(escrow_id)
     }
 
+    /// Returns batch limit.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    ///
+    /// # Returns
+    /// The requested u32 value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_batch_limit(env: Env) -> u32 {
         env.storage()
             .instance()
@@ -8414,6 +9753,18 @@ impl EscrowContract {
             .unwrap_or(50) // Default limit of 50
     }
 
+    /// Sets batch limit.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `limit` - Maximum number of items to return or process.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn set_batch_limit(env: Env, admin: Address, limit: u32) -> Result<(), Error> {
         admin.require_auth();
         let config = Self::get_multisig_config(env.clone());
@@ -8431,6 +9782,18 @@ impl EscrowContract {
 
     // ── EXPIRY ────────────────────────────────────────────────────────────
 
+    /// Sets global expiry config.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `default_expiry_seconds` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn set_global_expiry_config(
         env: Env,
         admin: Address,
@@ -8450,6 +9813,17 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns true if escrow expired.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// True or false.
+    ///
+    /// # Panics
+    /// Panics if the contract state is invalid.
     pub fn is_escrow_expired(env: Env, escrow_id: u64) -> bool {
         if !env
             .storage()
@@ -8465,6 +9839,17 @@ impl EscrowContract {
         env.ledger().timestamp() >= escrow.expiry_timestamp
     }
 
+    /// Executes expire escrow.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn expire_escrow(env: Env, escrow_id: u64) -> Result<(), Error> {
         if !env
             .storage()
@@ -8647,6 +10032,21 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Creates template.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `owner` - Parameter value.
+    /// * `token` - Address of the token contract.
+    /// * `amount` - Amount of tokens or funds.
+    /// * `release_delay_seconds` - Parameter value.
+    /// * `description` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(u64)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn create_template(
         env: Env,
         owner: Address,
@@ -8688,6 +10088,18 @@ impl EscrowContract {
         Ok(template_id)
     }
 
+    /// Creates escrow from template.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `customer` - Address of the signer or participant.
+    /// * `template_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(u64)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn create_escrow_from_template(
         env: Env,
         customer: Address,
@@ -8729,6 +10141,18 @@ impl EscrowContract {
         Ok(escrow_id)
     }
 
+    /// Executes batch release escrows.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `request` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(BatchReleaseResult)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn batch_release_escrows(
         env: Env,
         admin: Address,
@@ -8772,6 +10196,18 @@ impl EscrowContract {
         })
     }
 
+    /// Executes deactivate template.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `owner` - Parameter value.
+    /// * `template_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn deactivate_template(env: Env, owner: Address, template_id: u64) -> Result<(), Error> {
         owner.require_auth();
 
@@ -8792,6 +10228,17 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns template.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `template_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(EscrowTemplate)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn get_template(env: Env, template_id: u64) -> Result<EscrowTemplate, Error> {
         env.storage()
             .instance()
@@ -8962,6 +10409,21 @@ impl EscrowContract {
         sub.fee_bps_override.unwrap_or(parent_fee_bps)
     }
 
+    /// Creates sub account.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `merchant` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    /// * `label_hash` - Parameter value.
+    /// * `amount` - Amount of tokens or funds.
+    /// * `fee_bps_override` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(u64)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn create_sub_account(
         env: Env,
         merchant: Address,
@@ -9019,6 +10481,20 @@ impl EscrowContract {
         Ok(sub_id)
     }
 
+    /// Sets sub account fee overrIDe.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `merchant` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    /// * `sub_id` - Identifier for the requested object.
+    /// * `fee_bps_override` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn set_sub_account_fee_override(
         env: Env,
         merchant: Address,
@@ -9052,6 +10528,20 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Executes fund sub account.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `funder` - Parameter value.
+    /// * `escrow_id` - Identifier for the requested object.
+    /// * `sub_id` - Identifier for the requested object.
+    /// * `amount` - Amount of tokens or funds.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn fund_sub_account(
         env: Env,
         funder: Address,
@@ -9103,6 +10593,19 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Releases sub account.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    /// * `sub_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn release_sub_account(
         env: Env,
         admin: Address,
@@ -9153,12 +10656,32 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Returns sub account.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    /// * `sub_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Some result when found or None when no value exists.
     pub fn get_sub_account(env: Env, escrow_id: u64, sub_id: u64) -> Option<EscrowSubAccount> {
         env.storage()
             .instance()
             .get(&DataKey::Escrow(EscrowKey::SubAccount(escrow_id, sub_id)))
     }
 
+    /// Executes list sub accounts.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// The requested Vec<EscrowSubAccount> value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn list_sub_accounts(env: Env, escrow_id: u64) -> Vec<EscrowSubAccount> {
         let sub_count: u64 = env
             .storage()
@@ -9180,6 +10703,21 @@ impl EscrowContract {
         result
     }
 
+    /// Executes configure escrow swap.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `merchant` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    /// * `target_token` - Parameter value.
+    /// * `min_output` - Parameter value.
+    /// * `oracle` - Parameter value.
+    ///
+    /// # Returns
+    /// Results in `Ok(())` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn configure_escrow_swap(
         env: Env,
         merchant: Address,
@@ -9224,6 +10762,18 @@ impl EscrowContract {
         Ok(())
     }
 
+    /// Executes a queued or direct action.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `caller` - Address of the signer or participant.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Results in `Ok(i128)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn execute_escrow_swap(env: Env, caller: Address, escrow_id: u64) -> Result<i128, Error> {
         // Authenticate the caller to follow standard signature verification pattern.
         caller.require_auth();
@@ -9288,12 +10838,36 @@ impl EscrowContract {
         Ok(output_amount)
     }
 
+    /// Returns swap config.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `escrow_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// Some result when found or None when no value exists.
     pub fn get_swap_config(env: Env, escrow_id: u64) -> Option<EscrowSwapConfig> {
         env.storage()
             .instance()
             .get(&DataKey::Dispute(DisputeKey::EscrowSwapConfig(escrow_id)))
     }
 
+    /// Creates child escrow.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `admin` - Address of the signer or participant.
+    /// * `parent_id` - Identifier for the requested object.
+    /// * `amount` - Amount of tokens or funds.
+    /// * `token` - Address of the token contract.
+    /// * `customer` - Address of the signer or participant.
+    /// * `merchant` - Address of the signer or participant.
+    ///
+    /// # Returns
+    /// Results in `Ok(u64)` on success or `Err(Error)` on failure.
+    ///
+    /// # Errors
+    /// Returns `Err(Error)` when the operation cannot be completed.
     pub fn create_child_escrow(
         env: Env,
         admin: Address,
@@ -9372,6 +10946,17 @@ impl EscrowContract {
         Ok(child_id)
     }
 
+    /// Returns escrow hierarchy.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `root_id` - Parameter value.
+    ///
+    /// # Returns
+    /// The requested Vec<EscrowHierarchyNode> value.
+    ///
+    /// # Panics
+    /// Panics if required state is missing.
     pub fn get_escrow_hierarchy(env: Env, root_id: u64) -> Vec<EscrowHierarchyNode> {
         let mut result = Vec::new(&env);
         if !env
@@ -9412,6 +10997,17 @@ impl EscrowContract {
         result
     }
 
+    /// Executes can parent release.
+    ///
+    /// # Arguments
+    /// * `env` - Soroban environment.
+    /// * `parent_id` - Identifier for the requested object.
+    ///
+    /// # Returns
+    /// True or false.
+    ///
+    /// # Panics
+    /// Panics if the contract state is invalid.
     pub fn can_parent_release(env: Env, parent_id: u64) -> bool {
         if !env
             .storage()
