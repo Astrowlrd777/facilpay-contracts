@@ -48,6 +48,13 @@ cargo test --workspace
 cargo test -p escrow
 cargo test -p payment
 cargo test -p refund
+
+# Test a single test file or function within a contract
+cargo test -p refund test_arbitration_fees
+cargo test -p escrow test_dispute_resolution
+
+# Run tests matching a pattern
+cargo test -p payment test_fee
 ```
 
 ## 📂 Contract Overview
