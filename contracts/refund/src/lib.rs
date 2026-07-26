@@ -8398,3 +8398,6 @@ mod test_voucher_expiry;
 
 #[cfg(test)]
 mod schema_version_test;
+
+#[cfg(test)]
+mod test_merchant_override_and_error_codes;
