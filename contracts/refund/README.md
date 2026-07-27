@@ -20,6 +20,20 @@ cargo test -p refund
 
 The refund contract defines a set of numeric error codes in [src/lib.rs](src/lib.rs). For a complete reference of every error variant, see [ERRORS.md](ERRORS.md).
 
+## 🏷️ Refund Reason Codes
+
+The `request_refund()` function requires a type-safe `RefundReasonCode` enum variant to categorize refund requests for structured querying and analytics (`get_reason_code_analytics()`).
+
+| Variant | Description | Intended Scenario |
+|---|---|---|
+| `ProductDefect` | Item or service was defective, damaged, non-functional, or significantly different from description. | Received a broken item, malfunctioning software, or flawed goods. |
+| `NonDelivery` | Goods or services were not received within the expected fulfillment window or were lost in transit. | Package lost in shipping, or service provider failed to show up. |
+| `DuplicateCharge` | Customer was billed multiple times by accident for a single order or transaction. | System or network error causing duplicate payment execution. |
+| `Unauthorized` | Transaction was initiated without the account owner's knowledge or consent (fraudulent activity). | Compromised account, stolen credentials, or unapproved charge. |
+| `CustomerRequest` | Buyer requested cancellation, return, or exchange under standard buyer's remorse or return policy. | Customer changed their mind, ordered wrong size, or no longer needed the item. |
+| `Other` | Fallback or unclassified refund reason that does not fit standard variants, or legacy backfills. | Custom agreements, edge cases, or initial code migrations for unknown historical reasons. |
+
+
 ## 📂 Public Functions
 
 ### Initialization & Schema
